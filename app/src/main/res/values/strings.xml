@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CoC Auto</string>
+    <string name="accessibility_service_label">CoC Auto - Điều khiển cảm ứng</string>
+    <string name="accessibility_service_description">Cho phép CoC Auto thực hiện chạm/vuốt tự động trong Clash of Clans và hiển thị thanh điều khiển nổi cùng khung hiệu chỉnh tọa độ.</string>
+</resources>

@@ -1,0 +1,8 @@
+{
+  "versionCode": 7,
+  "versionName": "1.4.1",
+  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.4.1.apk",
+  "changelog": "- Sửa lệch khung ~4.5% do lỗ đục camera (Display Cutout) khi hiệu chỉnh tọa độ\n- Tự tách riêng nút Thợ xây (0/2) và Lab (1/1), quét tăng cường chữ CHIẾN ĐẤU & thu gọn Đỉnh Đông vào vùng bãi cỏ\n- Nâng cấp luồng đi farm: dùng OCR tìm đúng chữ nút Tìm trận / Tấn công / Tiếp / Đồng ý / Về nhà trên giao diện CoC 2026\n- Thêm nút cài nhanh theo cấp Nhà Chính (TH 3–6, TH 7–9, TH 10–12, TH 13+)",
+  "sha256": "",
+  "mandatory": false
+}
