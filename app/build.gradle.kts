@@ -8,13 +8,22 @@ plugins {
 
 android {
   namespace = "com.cocauto.helper"
-  compileSdk = 37
+  compileSdk = 36
   defaultConfig {
     applicationId = "com.cocauto.helper"
     minSdk = 26
     targetSdk = 35
     versionCode = 7
     versionName = "1.4.1"
+  }
+
+  signingConfigs {
+    getByName("debug") {
+      storeFile = file("debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
   }
 
   buildTypes {
