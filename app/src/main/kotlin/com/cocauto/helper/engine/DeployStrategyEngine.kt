@@ -92,22 +92,24 @@ object DeployStrategyEngine {
                 }
             }
 
-            // 2. Smart re-scan cleanup passes (up to 2 sweeps with slight inset variations) so any
-            // leftover troops (e.g. if a drop point hit a red unplaceable obstacle) still get deployed!
-            val cleanupInsets = listOf(0.05f, 0.12f)
-            for ((passIdx, inset) in cleanupInsets.withIndex()) {
-                ctx.ensureRunning()
-                ctx.sleep(260L)
-                val remaining = scanAvailableCards(ctx).filter { !it.isVisualFallback || passIdx == 0 }
-                if (remaining.isEmpty()) break
-                BotStateStore.setAction("Thả nốt ${remaining.size} ô quân còn lại (đợt vét ${passIdx + 1})")
-                val sweepPoints = planDropPoints(
+            // 2. Smart OUTWARD cleanup passes along the far outer green grass edges so any leftover troops
+            // (e.g. if a base was very wide or only partially zoomed out) ALWAYS land on deployable grass!
+            val cleanupPointSets = listOf(
+                outerGrassPerimeterPoints(),
+                planDropPoints(
                     strategy = cfg.deployStrategy,
                     calibration = cal,
                     focusedEdges = cfg.focusedEdges,
-                    pointsPerEdge = 6,
-                    insetTowardCenter = inset,
-                )
+                    pointsPerEdge = 5,
+                    insetTowardCenter = 0f,
+                ),
+            )
+            for ((passIdx, sweepPoints) in cleanupPointSets.withIndex()) {
+                ctx.ensureRunning()
+                ctx.sleep(240L)
+                val remaining = scanAvailableCards(ctx).filter { !it.isVisualFallback || passIdx == 0 }
+                if (remaining.isEmpty()) break
+                BotStateStore.setAction("Thả nốt ${remaining.size} ô quân còn lại (viền cỏ xanh ${passIdx + 1})")
                 deployDetectedCards(ctx, remaining, sweepPoints, divisor = 1)
             }
 
@@ -144,19 +146,55 @@ object DeployStrategyEngine {
 
             // Select this exact troop card on the bottom bar
             ctx.tap(card.tapPoint, delayAfter = false)
-            ctx.sleep(150L)
+            ctx.sleep(160L)
 
-            // Distribute drops proportional to real available count (+ small margin for missed/red tiles)
-            val totalTaps = ((card.count + 2) / safeDiv).coerceIn(3, 55)
-            for (t in 0 until totalTaps) {
-                ctx.ensureRunning()
-                val pt = dropPoints[t % dropPoints.size]
-                ctx.tap(pt, delayAfter = false)
-                ctx.sleep(58L)
+            val desiredUnits = ((card.count + 2) / safeDiv).coerceIn(2, 60)
+            if (desiredUnits >= 8 && !card.isVisualFallback) {
+                // Fast press-and-hold deployment across spread outer-grass points (~5-8 troops per hold!)
+                val holdSpots = (desiredUnits / 5).coerceIn(4, minOf(12, dropPoints.size))
+                val step = (dropPoints.size.toFloat() / holdSpots).coerceAtLeast(1f)
+                for (s in 0 until holdSpots) {
+                    ctx.ensureRunning()
+                    val pt = dropPoints[(s * step).toInt().coerceIn(0, dropPoints.lastIndex)]
+                    ctx.tap(pt, delayAfter = false, holdMsOverride = 620L)
+                    ctx.sleep(45L)
+                }
+            } else {
+                val totalTaps = desiredUnits.coerceIn(2, 16)
+                for (t in 0 until totalTaps) {
+                    ctx.ensureRunning()
+                    val pt = dropPoints[(t * 2) % dropPoints.size]
+                    ctx.tap(pt, delayAfter = false, holdMsOverride = if (desiredUnits >= 4) 160L else null)
+                    ctx.sleep(55L)
+                }
             }
-            ctx.sleep(110L)
+            ctx.sleep(100L)
         }
     }
+
+    /**
+     * Safe far-outer green grass anchors hugging the screen perimeter outside the red unplaceable zone,
+     * staying well clear of top-left loot text, top-right resources, bottom-left Surrender, bottom-right Next,
+     * and the bottom troop dock.
+     */
+    private fun outerGrassPerimeterPoints(): List<NormPoint> = listOf(
+        // Far-right open grass & top-right grass corner
+        NormPoint(0.92f, 0.30f),
+        NormPoint(0.93f, 0.44f),
+        NormPoint(0.92f, 0.56f),
+        NormPoint(0.82f, 0.22f),
+        NormPoint(0.74f, 0.14f),
+        // Far-left open grass & bottom-left grass corner
+        NormPoint(0.06f, 0.36f),
+        NormPoint(0.06f, 0.48f),
+        NormPoint(0.07f, 0.60f),
+        NormPoint(0.18f, 0.63f),
+        // Upper-center & lower-center edges
+        NormPoint(0.36f, 0.12f),
+        NormPoint(0.64f, 0.12f),
+        NormPoint(0.35f, 0.76f),
+        NormPoint(0.65f, 0.76f),
+    )
 
     private suspend fun scanAvailableCards(ctx: BotExecutionContext): List<DetectedTroopCard> {
         return ctx.withFrame { frame ->

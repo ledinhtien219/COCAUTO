@@ -81,10 +81,10 @@ class BotExecutionContext(
         sleep(Random.nextLong(minMs, maxMs + 1L))
     }
 
-    suspend fun tap(point: NormPoint, delayAfter: Boolean = true): Boolean {
+    suspend fun tap(point: NormPoint, delayAfter: Boolean = true, holdMsOverride: Long? = null): Boolean {
         ensureRunning()
         val jitterPx = config.safety.humanizeJitterPx
-        val holdMs = Random.nextLong(42L, 86L)
+        val holdMs = holdMsOverride?.coerceIn(40L, 1_200L) ?: Random.nextLong(42L, 86L)
 
         val ok = if (isAdbBridgeMode()) {
             val bridge = bridgeManager.ensureConnected() ?: return false

@@ -175,19 +175,19 @@ object AutoTroopBarDetector {
                 runStart = c
             } else if (!active && runStart >= 0) {
                 val runLen = c - runStart
-                if (runLen in 2..14) {
-                    // If multiple adjacent cards merged together, split into ~7.5%-wide card centers
+                if (runLen >= 2) {
+                    // Split wide contiguous troop/hero/spell card blocks into ~6.4%-wide real CoC card centers
                     val leftNorm = barRoi.left + (barRoi.width * runStart / cols)
                     val rightNorm = barRoi.left + (barRoi.width * c / cols)
                     val segW = rightNorm - leftNorm
-                    val subCount = (segW / 0.072f).toInt().coerceIn(1, 10)
+                    val subCount = kotlin.math.round(segW / 0.064f).toInt().coerceIn(1, 12)
                     val stepW = segW / subCount
                     for (k in 0 until subCount) {
                         val cx = (leftNorm + stepW * (k + 0.5f)).coerceIn(0.05f, 0.95f)
                         cards.add(
                             DetectedTroopCard(
                                 tapPoint = NormPoint(cx, 0.910f),
-                                count = 6, // Conservative default count when visual-only (covers heroes/spells/troops)
+                                count = 6, // Conservative default count when visual-only (covers heroes/CC/spells/troops)
                                 isVisualFallback = true,
                                 rawLabel = "card",
                             ),

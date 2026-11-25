@@ -101,7 +101,8 @@ class AutoCalibrationEngineTest {
         // Builder center is on the left half (0/2), Lab is on the right half (1/1)
         assertTrue(p.builderBadgeButton.x < 0.90f)
         assertTrue(p.labShortcutPoint.x > p.builderBadgeButton.x + 0.03f)
-        // Deploy right stays inside green grass, avoiding right-side shop banner
-        assertTrue(p.deployRight.x <= 0.845f)
+        // Deploy corners sit safely on outer green grass outside the enemy red unplaceable zone
+        assertTrue(p.deployRight.x in 0.84f..0.925f)
+        assertTrue(p.deployLeft.x in 0.08f..0.165f)
     }
 }

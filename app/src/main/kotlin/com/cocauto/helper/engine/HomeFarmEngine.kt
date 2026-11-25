@@ -197,7 +197,7 @@ class HomeFarmEngine {
                 } else {
                     val fallbackOcr = ctx.ocrEngine.recognizeRoi(
                         frame = frame,
-                        roi = com.cocauto.helper.model.NormRect(0.01f, 0.05f, 0.32f, 0.38f),
+                        roi = com.cocauto.helper.model.NormRect(0.01f, 0.095f, 0.28f, 0.36f),
                         enhance = true,
                     )
                     ResourceParser.parseEnemyLootLines(fallbackOcr.lines)

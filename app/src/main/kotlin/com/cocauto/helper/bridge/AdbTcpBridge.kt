@@ -81,7 +81,7 @@ class AdbTcpBridge(
 
     override suspend fun tap(xPx: Int, yPx: Int, holdMs: Long): Boolean = withContext(Dispatchers.IO) {
         val cmd = if (holdMs > 75L) {
-            "input touchscreen swipe $xPx $yPx $xPx $yPx ${holdMs.coerceIn(40L, 400L)}"
+            "input touchscreen swipe $xPx $yPx $xPx $yPx ${holdMs.coerceIn(40L, 1_200L)}"
         } else {
             "input tap $xPx $yPx"
         }
@@ -93,7 +93,15 @@ class AdbTcpBridge(
         runCatching { execShell("input touchscreen swipe $x1 $y1 $x2 $y2 $dur"); true }.getOrDefault(false)
     }
 
-    override suspend fun pinchZoomOut(width: Int, height: Int): Boolean = true
+    override suspend fun pinchZoomOut(width: Int, height: Int): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val apkPath = context.applicationContext.packageCodePath
+            val out = execShell(
+                "CLASSPATH='$apkPath' app_process / com.cocauto.helper.bridge.ShellPinchZoomMain $width $height 2",
+            )
+            out.contains("PINCH_OK")
+        }.getOrDefault(false)
+    }
 
     override suspend fun getScreenSize(): Pair<Int, Int> = withContext(Dispatchers.IO) {
         val wm = runCatching { execShell("wm size") }.getOrDefault("")

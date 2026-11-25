@@ -57,8 +57,8 @@ data class CalibrationProfile(
     // Home Village buttons & HUD ROIs (aligned to Clash of Clans 2025/2026 UI layout)
     val homeAttackButton: NormPoint = NormPoint(0.098f, 0.870f),
     val homeAttackLabelRoi: NormRect = NormRect(0.045f, 0.905f, 0.155f, 0.990f),
-    val findMatchButton: NormPoint = NormPoint(0.280f, 0.740f),
-    val armyConfirmAttackButton: NormPoint = NormPoint(0.845f, 0.840f),
+    val findMatchButton: NormPoint = NormPoint(0.215f, 0.740f),
+    val armyConfirmAttackButton: NormPoint = NormPoint(0.826f, 0.900f),
     val builderBadgeButton: NormPoint = NormPoint(0.885f, 0.765f),
     val builderBadgeRoi: NormRect = NormRect(0.845f, 0.715f, 0.920f, 0.805f),
     val builderSuggestionsRoi: NormRect = NormRect(0.450f, 0.140f, 0.945f, 0.720f),
@@ -77,10 +77,10 @@ data class CalibrationProfile(
 
     // Battle & Scouting ROIs & buttons
     val enemyLootRoi: NormRect = NormRect(0.045f, 0.105f, 0.215f, 0.300f),
-    val nextBaseButton: NormPoint = NormPoint(0.905f, 0.765f),
-    val nextButtonRoi: NormRect = NormRect(0.840f, 0.700f, 0.975f, 0.830f),
-    val endBattleButton: NormPoint = NormPoint(0.070f, 0.755f),
-    val endBattleRoi: NormRect = NormRect(0.015f, 0.695f, 0.145f, 0.825f),
+    val nextBaseButton: NormPoint = NormPoint(0.885f, 0.715f),
+    val nextButtonRoi: NormRect = NormRect(0.805f, 0.635f, 0.965f, 0.800f),
+    val endBattleButton: NormPoint = NormPoint(0.103f, 0.745f),
+    val endBattleRoi: NormRect = NormRect(0.035f, 0.690f, 0.175f, 0.805f),
     val surrenderConfirmButton: NormPoint = NormPoint(0.585f, 0.635f),
     val returnHomeButton: NormPoint = NormPoint(0.500f, 0.870f),
     val returnHomeRoi: NormRect = NormRect(0.390f, 0.810f, 0.610f, 0.935f),
@@ -90,11 +90,11 @@ data class CalibrationProfile(
     // Troop bar (1-based slots 1..12 mapped across this rect)
     val troopBarRoi: NormRect = NormRect(0.085f, 0.840f, 0.915f, 0.975f),
 
-    // Deploy diamond corners (after zoom-out) for 4-edge / directional / wave deployment
-    val deployTop: NormPoint = NormPoint(0.500f, 0.125f),
-    val deployRight: NormPoint = NormPoint(0.805f, 0.475f),
-    val deployBottom: NormPoint = NormPoint(0.500f, 0.785f),
-    val deployLeft: NormPoint = NormPoint(0.195f, 0.475f),
+    // Deploy diamond corners (after zoom-out) anchored safely on outer green grass outside the red zone
+    val deployTop: NormPoint = NormPoint(0.500f, 0.085f),
+    val deployRight: NormPoint = NormPoint(0.885f, 0.465f),
+    val deployBottom: NormPoint = NormPoint(0.500f, 0.775f),
+    val deployLeft: NormPoint = NormPoint(0.115f, 0.465f),
 
     // Builder Base buttons
     val bbAttackButton: NormPoint = NormPoint(0.075f, 0.875f),
@@ -159,7 +159,7 @@ data class CalibrationProfile(
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 3
+        const val CURRENT_SCHEMA_VERSION = 5
 
         fun forScreenDimensions(width: Int, height: Int): CalibrationProfile {
             val landscapeW = maxOf(width, height).coerceAtLeast(1)
@@ -194,10 +194,12 @@ data class CalibrationProfile(
                 homeElixirRoi = NormRect(0.770f, 0.098f, 0.930f, 0.155f),
                 homeDarkElixirRoi = NormRect(0.805f, 0.172f, 0.930f, 0.225f),
                 enemyLootRoi = NormRect(0.055f, 0.105f, 0.205f, 0.295f),
-                nextBaseButton = NormPoint(0.895f, 0.765f),
+                nextBaseButton = NormPoint(0.885f, 0.715f),
                 troopBarRoi = NormRect(0.110f, 0.840f, 0.890f, 0.975f),
-                deployLeft = NormPoint(0.165f, 0.475f),
-                deployRight = NormPoint(0.835f, 0.475f),
+                deployTop = NormPoint(0.500f, 0.085f),
+                deployLeft = NormPoint(0.105f, 0.465f),
+                deployRight = NormPoint(0.895f, 0.465f),
+                deployBottom = NormPoint(0.500f, 0.775f),
             )
 
             AspectPreset.RATIO_19_5_9, AspectPreset.AUTO -> CalibrationProfile(

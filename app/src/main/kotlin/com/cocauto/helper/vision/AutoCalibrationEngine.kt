@@ -148,6 +148,8 @@ object AutoCalibrationEngine {
                     line.bounds.centerY in 0.015f..0.25f &&
                     !norm.contains("gio") &&
                     !norm.contains("ng") &&
+                    !norm.contains("ph") &&
+                    !norm.contains("gi") &&
                     !norm.contains("h ") &&
                     !norm.contains("d ") &&
                     ResourceParser.parseResourceNumber(line.text) != null
@@ -357,8 +359,8 @@ object AutoCalibrationEngine {
             val usableW = (rightSafeEdge - leftSafeEdge).coerceIn(0.76f, 0.96f)
             val centerX = (leftSafeEdge + rightSafeEdge) * 0.5f
 
-            // Keep East/West corners inside the green grass area (avoiding right-side Shop banner & left HUD)
-            val deployHalfW = (usableW * 0.33f).coerceIn(0.27f, 0.34f)
+            // Keep East/West/North/South corners safely on outer green grass outside the enemy red zone
+            val deployHalfW = (usableW * 0.415f).coerceIn(0.36f, 0.43f)
             val safeAttackBtn = if (attackLine == null) {
                 NormPoint((leftSafeEdge + 0.052f).coerceIn(0.06f, 0.14f), 0.870f)
             } else {
@@ -368,10 +370,10 @@ object AutoCalibrationEngine {
             profile = profile.copy(
                 homeAttackButton = safeAttackBtn,
                 bbAttackButton = safeAttackBtn,
-                deployTop = NormPoint(centerX, 0.125f),
-                deployBottom = NormPoint(centerX, 0.785f),
-                deployLeft = NormPoint((centerX - deployHalfW).coerceIn(0.14f, 0.26f), 0.475f),
-                deployRight = NormPoint((centerX + deployHalfW).coerceIn(0.74f, 0.84f), 0.475f),
+                deployTop = NormPoint(centerX, 0.085f),
+                deployBottom = NormPoint(centerX, 0.775f),
+                deployLeft = NormPoint((centerX - deployHalfW).coerceIn(0.08f, 0.16f), 0.465f),
+                deployRight = NormPoint((centerX + deployHalfW).coerceIn(0.84f, 0.92f), 0.465f),
                 troopBarRoi = NormRect(
                     left = (leftSafeEdge + usableW * 0.035f).coerceIn(0.05f, 0.16f),
                     top = 0.840f,
@@ -397,37 +399,38 @@ object AutoCalibrationEngine {
                     profile.enemyLootRoi
                 },
                 nextBaseButton = if (nextLine == null) {
-                    NormPoint((rightSafeEdge - 0.055f).coerceIn(0.84f, 0.94f), 0.765f)
+                    NormPoint((rightSafeEdge - 0.068f).coerceIn(0.84f, 0.92f), 0.715f)
                 } else {
                     profile.nextBaseButton
                 },
                 nextButtonRoi = if (nextLine == null) {
                     NormRect(
-                        left = (rightSafeEdge - 0.125f).coerceIn(0.78f, 0.88f),
-                        top = 0.695f,
-                        right = rightSafeEdge.coerceIn(0.90f, 0.99f),
-                        bottom = 0.835f,
+                        left = (rightSafeEdge - 0.150f).coerceIn(0.78f, 0.85f),
+                        top = 0.635f,
+                        right = (rightSafeEdge + 0.010f).coerceIn(0.92f, 0.99f),
+                        bottom = 0.800f,
                     ).normalized()
                 } else {
                     profile.nextButtonRoi
                 },
                 endBattleButton = if (endBattleLine == null) {
-                    NormPoint((leftSafeEdge + 0.045f).coerceIn(0.04f, 0.14f), 0.755f)
+                    NormPoint((leftSafeEdge + 0.055f).coerceIn(0.06f, 0.14f), 0.745f)
                 } else {
                     profile.endBattleButton
                 },
                 endBattleRoi = if (endBattleLine == null) {
                     NormRect(
-                        left = leftSafeEdge.coerceIn(0.01f, 0.10f),
-                        top = 0.695f,
-                        right = (leftSafeEdge + 0.12f).coerceIn(0.12f, 0.24f),
-                        bottom = 0.825f,
+                        left = (leftSafeEdge - 0.010f).coerceIn(0.01f, 0.08f),
+                        top = 0.690f,
+                        right = (leftSafeEdge + 0.130f).coerceIn(0.14f, 0.24f),
+                        bottom = 0.805f,
                     ).normalized()
                 } else {
                     profile.endBattleRoi
                 },
-                // Multiplayer "Find a Match" / "Tìm trận" sits on the left/lower-left of the Battle hub
-                findMatchButton = NormPoint((leftSafeEdge + usableW * 0.24f).coerceIn(0.20f, 0.36f), 0.740f),
+                // Multiplayer "Find a Match" / "Tìm Trận đấu" sits on the left/lower-left of the 2026 Battle hub
+                findMatchButton = NormPoint((leftSafeEdge + usableW * 0.185f).coerceIn(0.18f, 0.30f), 0.740f),
+                armyConfirmAttackButton = NormPoint((rightSafeEdge - 0.125f).coerceIn(0.76f, 0.88f), 0.900f),
                 returnHomeButton = if (returnHomeLine == null) NormPoint(centerX, 0.870f) else profile.returnHomeButton,
             )
             detected.add("Khung thả quân & Thanh lính")

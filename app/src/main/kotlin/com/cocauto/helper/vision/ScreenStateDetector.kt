@@ -39,8 +39,9 @@ class ScreenStateDetector(
             return ScreenAnalysis(GameScreenState.SEARCHING_CLOUDS, detailText = "Clouds")
         }
 
-        // 1. Check center dialogs (Disconnect / Reload / Personal break / Star Bonus)
-        val centerOcr = ocrEngine.recognizeRoi(frame, calibration.dialogCenterRoi, enhance = false)
+        // 1. Check center dialogs (Disconnect / Reload / Personal break / Welcome Back / Star Bonus)
+        val wideDialogRoi = com.cocauto.helper.model.NormRect(0.18f, 0.06f, 0.82f, 0.88f)
+        val centerOcr = ocrEngine.recognizeRoi(frame, wideDialogRoi, enhance = false)
         if (ResourceParser.isPersonalBreakText(centerOcr.fullText)) {
             return ScreenAnalysis(GameScreenState.PERSONAL_BREAK, detailText = centerOcr.fullText)
         }
@@ -50,6 +51,19 @@ class ScreenStateDetector(
                 norm.contains("reload") || norm.contains("try again") || norm.contains("tai lai") || norm.contains("thu lai")
             }?.center ?: NormPoint(0.50f, 0.62f)
             return ScreenAnalysis(GameScreenState.DISCONNECTED_DIALOG, suggestedTapPoint = reloadBtn, detailText = centerOcr.fullText)
+        }
+
+        // Check Welcome Back / Star Bonus / Reward popup BEFORE Home Village so Builder badge behind popup doesn't mask it
+        if (ResourceParser.isStarBonusOrRewardPopup(centerOcr.fullText)) {
+            val okTap = centerOcr.lines
+                .filter { it.bounds.centerY > 0.55f }
+                .firstOrNull { ResourceParser.isConfirmDialogButtonText(it.text) }
+                ?.center ?: NormPoint(0.508f, 0.825f)
+            return ScreenAnalysis(
+                GameScreenState.POPUP_DIALOG,
+                suggestedTapPoint = okTap,
+                detailText = centerOcr.fullText.take(60),
+            )
         }
 
         // 2. Check Battle Summary "Return Home"
@@ -102,7 +116,30 @@ class ScreenStateDetector(
             return ScreenAnalysis(GameScreenState.BATTLE_ACTIVE, suggestedTapPoint = endTap, detailText = endBattleOcr.fullText)
         }
 
-        // 5. Check Attack Menu / Army confirmation screen
+        // 5. Check 2025/2026 Battle Hub ("Tìm Trận đấu" on left side) & Army Confirmation ("Tấn công!" bottom-right)
+        // Check BEFORE Home Village because the right-side Builder badge ("3/3") remains visible behind the slide-out Battle Hub!
+        val leftBattleHubOcr = ocrEngine.recognizeRoi(
+            frame,
+            com.cocauto.helper.model.NormRect(0.06f, 0.62f, 0.38f, 0.86f),
+            enhance = false,
+        )
+        if (ResourceParser.isAttackMenuText(leftBattleHubOcr.fullText)) {
+            val btn = leftBattleHubOcr.lines.firstOrNull { ResourceParser.isAttackMenuText(it.text) }?.center
+                ?: calibration.findMatchButton
+            return ScreenAnalysis(GameScreenState.ATTACK_MENU, suggestedTapPoint = btn, detailText = leftBattleHubOcr.fullText)
+        }
+
+        val armyConfirmOcr = ocrEngine.recognizeRoi(
+            frame,
+            com.cocauto.helper.model.NormRect(0.68f, 0.82f, 0.94f, 0.96f),
+            enhance = false,
+        )
+        if (ResourceParser.isAttackMenuText(armyConfirmOcr.fullText)) {
+            val btn = armyConfirmOcr.lines.firstOrNull { ResourceParser.isAttackMenuText(it.text) }?.center
+                ?: calibration.armyConfirmAttackButton
+            return ScreenAnalysis(GameScreenState.ATTACK_MENU, suggestedTapPoint = btn, detailText = armyConfirmOcr.fullText)
+        }
+
         if (ResourceParser.isAttackMenuText(centerOcr.fullText)) {
             val btn = centerOcr.lines.firstOrNull { ResourceParser.isAttackMenuText(it.text) }?.center
                 ?: calibration.findMatchButton
@@ -119,15 +156,6 @@ class ScreenStateDetector(
         val attackBtnOcr = ocrEngine.recognizeRoi(frame, calibration.homeAttackLabelRoi, enhance = true)
         if (ResourceParser.isHomeAttackButtonText(attackBtnOcr.fullText)) {
             return ScreenAnalysis(GameScreenState.HOME_VILLAGE, detailText = attackBtnOcr.fullText)
-        }
-
-        // 7. Check Star Bonus / Reward popup
-        if (ResourceParser.isStarBonusOrRewardPopup(centerOcr.fullText)) {
-            return ScreenAnalysis(
-                GameScreenState.POPUP_DIALOG,
-                suggestedTapPoint = NormPoint(0.50f, 0.72f),
-                detailText = centerOcr.fullText,
-            )
         }
 
         return ScreenAnalysis(GameScreenState.UNKNOWN, detailText = centerOcr.fullText.take(60))
@@ -166,6 +194,21 @@ class ScreenStateDetector(
         ).normalized()
         val fallbackOcr = ocrEngine.recognizeRoi(frame, fallbackRoi, enhance = true)
         return ResourceParser.parseStrictBuilderStatus(fallbackOcr.lines) ?: BuilderStatus()
+    }
+
+    /**
+     * Reads Laboratory availability badge ("0/1" busy vs "1/1" idle) adjacent to Builder badge in 2026 UI.
+     */
+    suspend fun readLabStatus(frame: Bitmap, calibration: CalibrationProfile): BuilderStatus {
+        val pt = calibration.labShortcutPoint
+        val labRoi = com.cocauto.helper.model.NormRect(
+            left = (pt.x - 0.040f).coerceIn(0.01f, 0.92f),
+            top = (pt.y - 0.045f).coerceIn(0.01f, 0.92f),
+            right = (pt.x + 0.045f).coerceIn(0.08f, 0.995f),
+            bottom = (pt.y + 0.045f).coerceIn(0.08f, 0.995f),
+        ).normalized()
+        val ocr = ocrEngine.recognizeRoi(frame, labRoi, enhance = true)
+        return ResourceParser.parseBuilderStatus(ocr.fullText) ?: BuilderStatus()
     }
 
     suspend fun readEnemyLoot(frame: Bitmap, calibration: CalibrationProfile): LootReading {

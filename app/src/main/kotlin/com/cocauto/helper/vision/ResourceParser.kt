@@ -104,8 +104,14 @@ object ResourceParser {
             .sortedBy { it.bounds.centerY }
             .mapNotNull { line ->
                 val norm = normalizeForMatch(line.text)
-                // Ignore header labels or trophy indicators
-                if (norm.contains("loot") || norm.contains("chien loi") || norm.contains("troph") || norm.contains("cup")) {
+                val letterCount = line.text.count { it.isLetter() }
+                // Ignore header labels, trophy indicators, and enemy usernames containing digits (e.g. "Neptunium_237")
+                if (norm.contains("loot") ||
+                    norm.contains("chien loi") ||
+                    norm.contains("troph") ||
+                    norm.contains("cup") ||
+                    letterCount >= 3
+                ) {
                     null
                 } else {
                     parseResourceNumber(line.text)?.let { value -> line.bounds.centerY to value }
@@ -238,9 +244,15 @@ object ResourceParser {
                 fullNorm.contains("in progress") ||
                 fullNorm.contains("dang nang") ||
                 fullNorm.contains("other upgrades") ||
-                fullNorm.contains("nang cap khac")
+                fullNorm.contains("nang cap khac") ||
+                fullNorm.contains("da loc")
             ) {
                 insideNewBuildingSection = false
+                continue
+            }
+
+            // Skip in-progress timer rows like "Tháp Cung thủ 14ph 28gi" or "Kho chứa Tiên dược 3giờ 54ph"
+            if (Regex("""\b\d+\s*(gio|ph|gi|ngay|hr|min|sec|d\b|h\b|m\b)""").containsMatchIn(fullNorm)) {
                 continue
             }
 
@@ -365,7 +377,8 @@ object ResourceParser {
         config: AutoUpgradeConfig,
     ): UpgradeCandidate? {
         val eligible = candidates.filter { item ->
-            !isSkippedByKeywords(item.name, config.skipLabKeywords) &&
+            item.cost >= 100L &&
+                !isSkippedByKeywords(item.name, config.skipLabKeywords) &&
                 respectsResourceReserve(home, item.cost, item.currency, config)
         }
         if (eligible.isEmpty()) return null
@@ -477,6 +490,7 @@ object ResourceParser {
     fun isReturnHomeText(raw: String): Boolean {
         val norm = normalizeForMatch(raw)
         return norm.contains("return home") ||
+            norm.contains("ve lang") ||
             norm.contains("ve nha") ||
             norm.contains("tro ve") ||
             norm.contains("return to")
@@ -559,6 +573,10 @@ object ResourceParser {
         val norm = normalizeForMatch(raw)
         return norm.contains("star bonus") ||
             norm.contains("phan thuong sao") ||
+            norm.contains("chao mung") ||
+            norm.contains("welcome back") ||
+            norm.contains("vang mat") ||
+            norm.contains("nang cap da hoan tat") ||
             norm.contains("claim") ||
             norm.contains("nhan thuong") ||
             norm.contains("okay") ||

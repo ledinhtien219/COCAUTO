@@ -257,6 +257,19 @@ class AutoUpgradeEngine {
     private suspend fun runLaboratoryUpgrade(ctx: BotExecutionContext, homeRes: HomeResources) {
         val cfg = ctx.config.upgrade
         val cal = ctx.calibration
+
+        // Strictly check Lab badge ("0/1" busy vs "1/1" idle) BEFORE tapping Lab so we never open the sidebar unnecessarily!
+        val labStatus = ctx.withFrame { frame ->
+            ctx.screenDetector.readLabStatus(frame, cal)
+        }
+        if (labStatus != null && labStatus.isValid && labStatus.freeBuilders <= 0) {
+            BotStateStore.log(
+                "Phòng thí nghiệm (Lab) đang bận (${labStatus.freeBuilders}/${labStatus.totalBuilders}) — bỏ qua.",
+                LogLevel.INFO,
+            )
+            return
+        }
+
         BotStateStore.setAction("Kiểm tra Phòng thí nghiệm (Lab)", GameScreenState.LAB_MENU_OPEN)
 
         ctx.tap(cal.labShortcutPoint)
@@ -266,6 +279,8 @@ class AutoUpgradeEngine {
         val best = ResourceParser.selectBestLabUpgrade(candidates, homeRes, cfg)
         if (best == null) {
             BotStateStore.log("Lab đang bận hoặc chưa có lính/phép đủ tài nguyên theo bộ lọc.", LogLevel.INFO)
+            ctx.tap(NormPoint(0.94f, 0.045f)) // Close right-side drawer X if open
+            ctx.sleep(300L)
             ctx.tap(cal.dismissAreaPoint)
             ctx.sleep(400L)
             return
