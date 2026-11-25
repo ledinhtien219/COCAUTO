@@ -77,6 +77,24 @@ class MainActivity : ComponentActivity() {
     private var shizukuRunning by mutableStateOf(false)
     private var shizukuGranted by mutableStateOf(false)
 
+    private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {
+        runOnUiThread {
+            refreshSystemPermissionFlags()
+            if (BotStateStore.config.value.bridge.mode == ControlBackendMode.SHIZUKU_ADB && shizukuGranted) {
+                viewModel.testActiveBridge()
+            }
+        }
+    }
+
+    private val shizukuBinderDeadListener = Shizuku.OnBinderDeadListener {
+        runOnUiThread {
+            refreshSystemPermissionFlags()
+            BotStateStore.updateRuntime {
+                it.copy(bridgeConnected = false, bridgeStatusText = "Shizuku binder đã ngắt kết nối")
+            }
+        }
+    }
+
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode == ShizukuAdbBridge.SHIZUKU_PERM_REQ_CODE) {
             refreshSystemPermissionFlags()
@@ -121,7 +139,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
+        runCatching {
+            Shizuku.addBinderReceivedListenerSticky(shizukuBinderReceivedListener)
+            Shizuku.addBinderDeadListener(shizukuBinderDeadListener)
+            Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
+        }
         refreshSystemPermissionFlags()
 
         setContent {
@@ -133,7 +155,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        runCatching {
+            Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener)
+            Shizuku.removeBinderDeadListener(shizukuBinderDeadListener)
+            Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        }
         super.onDestroy()
     }
 

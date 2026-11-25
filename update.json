@@ -1,8 +1,8 @@
 {
-  "versionCode": 11,
-  "versionName": "2.0.0",
-  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v2.0.0.apk",
-  "changelog": "- Chuyển toàn bộ app sang kiến trúc ADB Cầu nối — KHÔNG cần bật Dịch vụ Trợ năng (AccessibilityService) và KHÔNG cần MediaProjection!\n- Hỗ trợ 3 chế độ ADB: Shizuku (ADB trên điện thoại qua Gỡ lỗi không dây), ADB TCP trực tiếp (127.0.0.1:5555), và ADB Cầu nối PC (USB / Wi-Fi)\n- Icon tròn di chuyển được & khung hiệu chỉnh chạy qua quyền Hiển thị trên ứng dụng khác (TYPE_APPLICATION_OVERLAY)",
+  "versionCode": 12,
+  "versionName": "2.0.1",
+  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v2.0.1.apk",
+  "changelog": "- Sửa thiếu ShizukuProvider trong AndroidManifest.xml khiến Shizuku không nhận được binder (provider is null)\n- Thêm BinderReceived/Dead listener cập nhật trạng thái Shizuku ADB tức thì",
   "sha256": "",
   "mandatory": false
 }
