@@ -103,6 +103,18 @@ class BotOrchestrator(
                         continue
                     }
 
+                    GameScreenState.BATTLE_SCOUT -> {
+                        BotStateStore.setAction("Đang ở màn hình soi nhà — kiểm tra & tự đánh!", GameScreenState.BATTLE_SCOUT)
+                        homeFarmEngine.handleCurrentScoutAndAttack(ctx)
+                        continue
+                    }
+
+                    GameScreenState.ATTACK_MENU -> {
+                        BotStateStore.setAction("Đang ở menu Chiến đấu — tìm trận ngay!", GameScreenState.ATTACK_MENU)
+                        homeFarmEngine.runAttackCycle(ctx, alreadyInAttackMenu = true)
+                        continue
+                    }
+
                     GameScreenState.BATTLE_SUMMARY -> {
                         BotStateStore.setAction("Bấm Về nhà sau trận", GameScreenState.BATTLE_SUMMARY)
                         ctx.tap(analysis.suggestedTapPoint ?: ctx.calibration.returnHomeButton)

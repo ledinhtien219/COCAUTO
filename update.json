@@ -1,8 +1,8 @@
 {
-  "versionCode": 9,
-  "versionName": "1.5.0",
-  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.5.0.apk",
-  "changelog": "- Sửa triệt để lỗi cài xong vẫn báo tải lại bản mới (đọc Build/versionCode chính xác + lưu lịch sử bản đã cài)\n- Nhận dạng Thợ xây nghiêm ngặt (tách riêng 0/2 khỏi Lab 1/1): chỉ nâng cấp & xây công trình mới khi có Thợ xây rảnh\n- Hỗ trợ tự đặt xây công trình mới (tự tìm dấu tích xanh ✓ xác nhận)",
+  "versionCode": 10,
+  "versionName": "1.6.0",
+  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.6.0.apk",
+  "changelog": "- Nâng cấp Auto Đánh theo quân có sẵn (AutoTroopBarDetector): tự quét thẻ quân x30/x20/x8... + Tướng/Phép thực tế trên thanh quân để thả hết quân, kèm đợt vét quân còn sót\n- Tự xác nhận hộp thoại cảnh báo Khiên (Shield) khi bấm Tìm trận\n- Mở rộng nhận diện màn hình Soi nhà (BATTLE_SCOUT) & hỗ trợ bấm Chạy ngay khi đang đứng ở màn hình Soi nhà",
   "sha256": "",
   "mandatory": false
 }

@@ -484,7 +484,27 @@ object ResourceParser {
 
     fun isNextButtonText(raw: String): Boolean {
         val norm = normalizeForMatch(raw)
-        return norm.contains("next") || norm.contains("tiep")
+        return norm.contains("next") ||
+            norm.contains("tiep") ||
+            norm.contains("tiep theo")
+    }
+
+    fun isScoutBannerText(raw: String): Boolean {
+        val norm = normalizeForMatch(raw)
+        return norm.contains("available loot") ||
+            norm.contains("chien loi pham") ||
+            norm.contains("battle starts") ||
+            norm.contains("tran dau bat dau") ||
+            norm.contains("bat dau sau")
+    }
+
+    fun isShieldWarningDialogText(raw: String): Boolean {
+        val norm = normalizeForMatch(raw)
+        return norm.contains("shield") ||
+            norm.contains("khien") ||
+            norm.contains("bao ve") ||
+            norm.contains("disable your shield") ||
+            norm.contains("giam thoi gian")
     }
 
     fun isEndBattleText(raw: String): Boolean {
@@ -499,7 +519,10 @@ object ResourceParser {
         val norm = normalizeForMatch(raw)
         if (norm.contains("choi don") || norm.contains("single player") ||
             norm.contains("luyen tap") || norm.contains("practice") ||
-            norm.contains("chinh doi") || norm.contains("edit army")
+            norm.contains("chinh doi") || norm.contains("edit army") ||
+            norm.contains("nhat ky") || norm.contains("lich su") ||
+            norm.contains("battle log") || norm.contains("huan luyen") ||
+            norm.contains("train") || norm.contains("su kien")
         ) {
             return false
         }
@@ -509,10 +532,9 @@ object ResourceParser {
             norm.contains("tim doi thu") ||
             norm.contains("tim kiem") ||
             norm.contains("battle!") ||
-            norm.contains("attack!") ||
-            norm == "attack" ||
-            norm == "tan cong" ||
-            norm.contains("tan cong!")
+            norm.contains("attack") ||
+            norm.contains("tan cong") ||
+            norm.contains("chien dau")
     }
 
     fun isConfirmDialogButtonText(raw: String): Boolean {

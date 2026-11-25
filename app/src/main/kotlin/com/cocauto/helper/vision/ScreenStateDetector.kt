@@ -60,16 +60,46 @@ class ScreenStateDetector(
             return ScreenAnalysis(GameScreenState.BATTLE_SUMMARY, suggestedTapPoint = tap, detailText = returnHomeOcr.fullText)
         }
 
-        // 3. Check Battle Scout ("Next" button visible)
-        val nextOcr = ocrEngine.recognizeRoi(frame, calibration.nextButtonRoi, enhance = true)
+        // 3. Check Battle Scout ("Next" / "Tiếp theo" visible in wide right-bottom zone)
+        val wideNextRoi = com.cocauto.helper.model.NormRect(
+            left = minOf(calibration.nextButtonRoi.left, 0.74f),
+            top = minOf(calibration.nextButtonRoi.top, 0.58f),
+            right = 0.99f,
+            bottom = maxOf(calibration.nextButtonRoi.bottom, 0.87f),
+        ).normalized()
+        val nextOcr = ocrEngine.recognizeRoi(frame, wideNextRoi, enhance = true)
         if (ResourceParser.isNextButtonText(nextOcr.fullText)) {
-            return ScreenAnalysis(GameScreenState.BATTLE_SCOUT, suggestedTapPoint = calibration.nextBaseButton, detailText = nextOcr.fullText)
+            val nextTap = nextOcr.lines.firstOrNull { ResourceParser.isNextButtonText(it.text) }?.center
+                ?: calibration.nextBaseButton
+            return ScreenAnalysis(GameScreenState.BATTLE_SCOUT, suggestedTapPoint = nextTap, detailText = nextOcr.fullText)
         }
 
-        // 4. Check Active Battle ("End Battle" / "Surrender" button visible)
-        val endBattleOcr = ocrEngine.recognizeRoi(frame, calibration.endBattleRoi, enhance = true)
+        // 4. Check End Battle / Surrender button (wide bottom-left zone) — distinguish BATTLE_SCOUT vs BATTLE_ACTIVE!
+        val wideEndRoi = com.cocauto.helper.model.NormRect(
+            left = 0.01f,
+            top = minOf(calibration.endBattleRoi.top, 0.60f),
+            right = maxOf(calibration.endBattleRoi.right, 0.22f),
+            bottom = maxOf(calibration.endBattleRoi.bottom, 0.86f),
+        ).normalized()
+        val endBattleOcr = ocrEngine.recognizeRoi(frame, wideEndRoi, enhance = true)
         if (ResourceParser.isEndBattleText(endBattleOcr.fullText)) {
-            return ScreenAnalysis(GameScreenState.BATTLE_ACTIVE, suggestedTapPoint = calibration.endBattleButton, detailText = endBattleOcr.fullText)
+            val endTap = endBattleOcr.lines.firstOrNull { ResourceParser.isEndBattleText(it.text) }?.center
+                ?: calibration.endBattleButton
+            // If top-left shows "Available Loot" / "Chiến lợi phẩm" + valid enemy loot numbers, treat as BATTLE_SCOUT
+            val topLeftOcr = ocrEngine.recognizeRoi(
+                frame,
+                com.cocauto.helper.model.NormRect(0.01f, 0.04f, 0.32f, 0.38f),
+                enhance = true,
+            )
+            val parsedLoot = ResourceParser.parseEnemyLootLines(topLeftOcr.lines)
+            if (ResourceParser.isScoutBannerText(topLeftOcr.fullText) || (parsedLoot.gold > 0L && parsedLoot.elixir > 0L)) {
+                return ScreenAnalysis(
+                    GameScreenState.BATTLE_SCOUT,
+                    suggestedTapPoint = calibration.nextBaseButton,
+                    detailText = "Scout(Loot=${parsedLoot.gold}/${parsedLoot.elixir})",
+                )
+            }
+            return ScreenAnalysis(GameScreenState.BATTLE_ACTIVE, suggestedTapPoint = endTap, detailText = endBattleOcr.fullText)
         }
 
         // 5. Check Attack Menu / Army confirmation screen

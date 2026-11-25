@@ -66,19 +66,19 @@ class HomeFarmEngine {
         }
     }
 
-    suspend fun runAttackCycle(ctx: BotExecutionContext) {
+    suspend fun runAttackCycle(ctx: BotExecutionContext, alreadyInAttackMenu: Boolean = false) {
         val cfg = ctx.config.homeFarm
-        val cal = ctx.calibration
         if (!cfg.autoAttack) return
 
-        BotStateStore.setAction("Mở menu Chiến đấu", GameScreenState.HOME_VILLAGE)
-        ctx.tap(cal.homeAttackButton)
-        ctx.sleep(1_000L)
+        if (!alreadyInAttackMenu) {
+            BotStateStore.setAction("Mở menu Chiến đấu", GameScreenState.HOME_VILLAGE)
+            ctx.tap(ctx.calibration.homeAttackButton)
+            ctx.sleep(1_100L)
+        }
 
-        // OCR-guided navigation through the 2025/2026 Battle Hub & Clash Anytime Army Confirmation screen:
-        // Finds exact "Tìm trận" / "Find a Match" / "Tấn công" / "Attack!" text on screen (up to 3 steps)
-        // so we never accidentally tap Single Player / Practice / Edit Army.
-        for (step in 1..3) {
+        // OCR-guided navigation through the 2025/2026 Battle Hub, Clash Anytime Army Confirmation,
+        // AND Shield Warning confirmation ("Tấn công sẽ giảm thời gian Khiên -> OK / Đồng ý")!
+        for (step in 1..4) {
             ctx.ensureRunning()
             val curState = ctx.withFrame { frame ->
                 ctx.screenDetector.analyzeScreen(frame, ctx.calibration, BotStateStore.runtime.value.foregroundPackage)
@@ -87,50 +87,73 @@ class HomeFarmEngine {
                 break
             }
 
-            val ocrButtonTap = ctx.withFrame { frame ->
+            val nextTap = ctx.withFrame { frame ->
                 val fullMenu = ctx.ocrEngine.recognizeRoi(
                     frame = frame,
-                    roi = com.cocauto.helper.model.NormRect(0.05f, 0.14f, 0.95f, 0.95f),
+                    roi = com.cocauto.helper.model.NormRect(0.04f, 0.14f, 0.96f, 0.96f),
                     enhance = false,
                 )
-                // Prefer "Find a Match" / "Tìm trận" first, then "Attack!" / "Tấn công"
-                val findLine = fullMenu.lines.firstOrNull { line ->
+
+                // 1. Handle Shield Warning confirmation dialog ("Khiên / Shield" -> tap "OK" / "Đồng ý")
+                if (ResourceParser.isShieldWarningDialogText(fullMenu.fullText)) {
+                    val confirmBtn = fullMenu.lines
+                        .filter { it.bounds.centerY > 0.48f }
+                        .firstOrNull {
+                            ResourceParser.isConfirmDialogButtonText(it.text) ||
+                                ResourceParser.normalizeForMatch(it.text).contains("tan cong") ||
+                                ResourceParser.normalizeForMatch(it.text).contains("attack")
+                        }
+                    return@withFrame "Xác nhận tắt Khiên" to (confirmBtn?.center ?: NormPoint(0.585f, 0.635f))
+                }
+
+                // 2. Prefer Multiplayer "Find a Match" / "Tìm trận" button (lower half of Battle Hub)
+                val lowerLines = fullMenu.lines.filter { it.bounds.centerY > 0.44f }
+                val findLine = lowerLines.firstOrNull { line ->
                     val n = ResourceParser.normalizeForMatch(line.text)
                     n.contains("tim tran") || n.contains("find a match") || n.contains("tim doi thu") || n.contains("find now")
+                } ?: lowerLines.firstOrNull { line ->
+                    ResourceParser.isAttackMenuText(line.text)
                 } ?: fullMenu.lines.firstOrNull { line ->
                     ResourceParser.isAttackMenuText(line.text)
                 }
-                findLine?.center
+
+                findLine?.let { it.text.trim() to it.center }
             }
 
-            if (ocrButtonTap != null) {
-                BotStateStore.setAction("Bấm Tìm trận / Tấn công (bước $step)", GameScreenState.ATTACK_MENU)
-                ctx.tap(ocrButtonTap)
-                ctx.sleep(1_200L)
+            if (nextTap != null) {
+                BotStateStore.setAction("Bấm '${nextTap.first}' (bước $step)", GameScreenState.ATTACK_MENU)
+                BotStateStore.log("Menu Chiến đấu -> bấm '${nextTap.first}'", LogLevel.INFO)
+                ctx.tap(nextTap.second)
+                ctx.sleep(1_300L)
             } else if (step == 1) {
-                // Fallback to calibrated Multiplayer button on left side of Battle menu
-                ctx.tap(cal.findMatchButton)
-                ctx.sleep(1_200L)
+                BotStateStore.setAction("Bấm Tìm trận (tọa độ mặc định)", GameScreenState.ATTACK_MENU)
+                ctx.tap(ctx.calibration.findMatchButton)
+                ctx.sleep(1_300L)
             } else {
                 break
             }
         }
 
-        // Search & Next loop
+        handleCurrentScoutAndAttack(ctx)
+    }
+
+    /**
+     * Evaluates enemy base(s) starting from Battle Scout / Clouds, deploys available troops once
+     * a base matches loot thresholds, and monitors battle completion until Return Home.
+     */
+    suspend fun handleCurrentScoutAndAttack(ctx: BotExecutionContext) {
+        val cfg = ctx.config.homeFarm
         val matchedLoot = searchForTargetBase(ctx) ?: return
 
-        // Execute configured deployment strategy
         BotStateStore.setAction("Đang đánh nhà mục tiêu!", GameScreenState.BATTLE_ACTIVE)
         BotStateStore.log(
-            "Đánh nhà: Vàng ${formatK(matchedLoot.gold)} | Dầu ${formatK(matchedLoot.elixir)} | DE ${matchedLoot.darkElixir}",
+            "Tìm thấy nhà đạt chuẩn: Vàng ${formatK(matchedLoot.gold)} | Dầu ${formatK(matchedLoot.elixir)} | DE ${matchedLoot.darkElixir} — tự đánh!",
             LogLevel.SUCCESS,
         )
         DeployStrategyEngine.executeHomeAttack(ctx)
 
-        // Monitor battle until Return Home or timeout / early surrender
         monitorAndFinishBattle(ctx, matchedLoot)
 
-        // Cooldown before next cycle
         if (cfg.postBattleCooldownSec > 0) {
             ctx.sleep(cfg.postBattleCooldownSec * 1_000L)
         }
@@ -138,15 +161,14 @@ class HomeFarmEngine {
 
     private suspend fun searchForTargetBase(ctx: BotExecutionContext): LootReading? {
         val cfg = ctx.config.homeFarm
-        val cal = ctx.calibration
         val maxNexts = cfg.maxNextCount.coerceIn(1, 200)
 
         for (attempt in 1..maxNexts) {
             ctx.ensureRunning()
             BotStateStore.setAction("Đang tìm nhà #$attempt/$maxNexts...", GameScreenState.SEARCHING_CLOUDS)
 
-            val arrivedInScout = waitUntilScoutReady(ctx, timeoutMs = 28_000L)
-            if (!arrivedInScout) {
+            val scoutAnalysis = waitUntilScoutReady(ctx, timeoutMs = 28_000L)
+            if (scoutAnalysis == null) {
                 BotStateStore.log("Quá thời gian chờ mây / không vào được màn hình soi nhà.", LogLevel.WARN)
                 return null
             }
@@ -173,10 +195,9 @@ class HomeFarmEngine {
                 if (primary.isValid) {
                     primary
                 } else {
-                    // Fallback wider top-left scan if enemyLootRoi was slightly off
                     val fallbackOcr = ctx.ocrEngine.recognizeRoi(
                         frame = frame,
-                        roi = com.cocauto.helper.model.NormRect(0.02f, 0.08f, 0.30f, 0.38f),
+                        roi = com.cocauto.helper.model.NormRect(0.01f, 0.05f, 0.32f, 0.38f),
                         enhance = true,
                     )
                     ResourceParser.parseEnemyLootLines(fallbackOcr.lines)
@@ -187,6 +208,10 @@ class HomeFarmEngine {
             BotStateStore.setAction(
                 "Nhà #$attempt: V=${formatK(loot.gold)} D=${formatK(loot.elixir)} DE=${loot.darkElixir}",
                 GameScreenState.BATTLE_SCOUT,
+            )
+            BotStateStore.log(
+                "Soi nhà #$attempt: Vàng ${formatK(loot.gold)} | Dầu ${formatK(loot.elixir)} | DE ${loot.darkElixir}",
+                LogLevel.INFO,
             )
 
             val matched = ResourceParser.matchesLootFilter(loot, cfg)
@@ -200,20 +225,25 @@ class HomeFarmEngine {
                     loot
                 } else {
                     BotStateStore.log("Đạt $maxNexts lượt Next không đạt ngưỡng — quay về nhà chính.", LogLevel.INFO)
-                    ctx.tap(cal.endBattleButton)
+                    ctx.tap(latestCal.endBattleButton)
                     ctx.sleep(1_400L)
                     null
                 }
             }
 
             BotStateStore.updateStats { it.copy(basesSkipped = it.basesSkipped + 1) }
-            ctx.tap(cal.nextBaseButton)
-            ctx.sleep(1_300L)
+            // Tap exact live OCR-detected "Next" / "Tiếp" button when available, else latest calibrated point
+            val nextTap = scoutAnalysis.suggestedTapPoint ?: latestCal.nextBaseButton
+            ctx.tap(nextTap)
+            ctx.sleep(1_350L)
         }
         return null
     }
 
-    private suspend fun waitUntilScoutReady(ctx: BotExecutionContext, timeoutMs: Long): Boolean {
+    private suspend fun waitUntilScoutReady(
+        ctx: BotExecutionContext,
+        timeoutMs: Long,
+    ): com.cocauto.helper.vision.ScreenAnalysis? {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             ctx.ensureRunning()
@@ -221,16 +251,16 @@ class HomeFarmEngine {
                 ctx.screenDetector.analyzeScreen(frame, ctx.calibration, BotStateStore.runtime.value.foregroundPackage)
             }
             when (analysis?.state) {
-                GameScreenState.BATTLE_SCOUT -> return true
-                GameScreenState.HOME_VILLAGE -> return false
+                GameScreenState.BATTLE_SCOUT, GameScreenState.BATTLE_ACTIVE -> return analysis
+                GameScreenState.HOME_VILLAGE -> return null
                 GameScreenState.DISCONNECTED_DIALOG -> {
                     analysis.suggestedTapPoint?.let { ctx.tap(it) }
-                    return false
+                    return null
                 }
-                else -> ctx.sleep(700L)
+                else -> ctx.sleep(650L)
             }
         }
-        return false
+        return null
     }
 
     private suspend fun monitorAndFinishBattle(ctx: BotExecutionContext, targetLoot: LootReading) {
