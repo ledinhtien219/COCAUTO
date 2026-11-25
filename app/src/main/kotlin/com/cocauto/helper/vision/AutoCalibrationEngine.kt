@@ -223,10 +223,10 @@ object AutoCalibrationEngine {
             val isBottomRight = builderBadge.bounds.centerY > 0.50f
             val suggestionsRoi = if (isBottomRight) {
                 NormRect(
-                    left = (bRoi.right - 0.46f).coerceIn(0.36f, 0.58f),
-                    top = (bRoi.top - 0.54f).coerceIn(0.12f, 0.25f),
-                    right = (rightSafeEdge - 0.005f).coerceIn(0.80f, 0.98f),
-                    bottom = (bRoi.top - 0.015f).coerceIn(0.55f, 0.75f),
+                    left = (rightSafeEdge - 0.285f).coerceIn(0.64f, 0.72f),
+                    top = 0.085f,
+                    right = (rightSafeEdge + 0.010f).coerceIn(0.92f, 0.98f),
+                    bottom = 0.865f,
                 ).normalized()
             } else {
                 NormRect(

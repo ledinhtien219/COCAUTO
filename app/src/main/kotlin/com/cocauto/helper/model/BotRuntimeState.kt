@@ -38,6 +38,7 @@ enum class CurrencyType {
     GOLD,
     ELIXIR,
     DARK_ELIXIR,
+    GEMS,
     UNKNOWN,
 }
 
@@ -84,7 +85,11 @@ data class UpgradeCandidate(
     val tapPoint: NormPoint,
     val isWall: Boolean = false,
     val isNewBuilding: Boolean = false,
-)
+    val durationSeconds: Long = Long.MAX_VALUE,
+    val isUnaffordableRed: Boolean = false,
+) {
+    val hasKnownDuration: Boolean get() = durationSeconds in 0L..(365L * 86_400L)
+}
 
 data class BotLogEntry(
     val timestampMs: Long = System.currentTimeMillis(),

@@ -7,6 +7,7 @@ import com.cocauto.helper.model.LogLevel
 import com.cocauto.helper.model.LootReading
 import com.cocauto.helper.model.NormPoint
 import com.cocauto.helper.vision.AutoCalibrationEngine
+import com.cocauto.helper.vision.AutoTroopBarDetector
 import com.cocauto.helper.vision.ImageAnalyzer
 import com.cocauto.helper.vision.ResourceParser
 
@@ -113,11 +114,31 @@ class HomeFarmEngine {
                     ResourceParser.isAttackMenuText(line.text)
                 }
 
+                // On Army Confirm ("Quân đội của tôi") screen, abort ONLY if army is literally empty (0/N)!
+                val isArmyConfirmStep = findLine != null && (
+                    ResourceParser.normalizeForMatch(findLine.text).contains("tan cong") ||
+                        ResourceParser.normalizeForMatch(findLine.text).startsWith("attack")
+                    )
+                if (isArmyConfirmStep) {
+                    val armyCap = ResourceParser.parseArmyCampCapacity(lines)
+                    if (armyCap != null && armyCap.first <= 0) {
+                        return@withFrame Triple(analysis.state, "EMPTY_ARMY:${armyCap.first}/${armyCap.second}", null as NormPoint?)
+                    }
+                }
+
                 Triple(analysis.state, findLine?.text?.trim().orEmpty(), findLine?.center)
             }
 
             if (menuResult == null) break
             val (state, label, tapPt) = menuResult
+            if (label.startsWith("EMPTY_ARMY:")) {
+                val capStr = label.removePrefix("EMPTY_ARMY:")
+                BotStateStore.log("Trại lính đang trống ($capStr) — tạm chờ có quân rồi chiến!", LogLevel.WARN)
+                BotStateStore.setAction("Chưa có quân ($capStr) — chờ đủ quân", GameScreenState.ATTACK_MENU)
+                ctx.tap(NormPoint(0.945f, 0.065f), delayAfter = false)
+                ctx.sleep(500L)
+                return
+            }
             if (state == GameScreenState.SEARCHING_CLOUDS || state == GameScreenState.BATTLE_SCOUT) {
                 break
             }
@@ -154,10 +175,12 @@ class HomeFarmEngine {
         val matchedLoot = searchForTargetBase(ctx) ?: return
 
         BotStateStore.setAction("Đang đánh nhà mục tiêu!", GameScreenState.BATTLE_ACTIVE)
-        BotStateStore.log(
-            "Tìm thấy nhà đạt chuẩn: Vàng ${formatK(matchedLoot.gold)} | Dầu ${formatK(matchedLoot.elixir)} | DE ${matchedLoot.darkElixir} — tự đánh!",
-            LogLevel.SUCCESS,
-        )
+        val attackReason = if (cfg.attackWhenArmyReady) {
+            "Đủ quân — chiến ngay! (Vàng ${formatK(matchedLoot.gold)} | Dầu ${formatK(matchedLoot.elixir)} | DE ${matchedLoot.darkElixir})"
+        } else {
+            "Tìm thấy nhà đạt chuẩn: Vàng ${formatK(matchedLoot.gold)} | Dầu ${formatK(matchedLoot.elixir)} | DE ${matchedLoot.darkElixir} — tự đánh!"
+        }
+        BotStateStore.log(attackReason, LogLevel.SUCCESS)
         DeployStrategyEngine.executeHomeAttack(ctx)
 
         monitorAndFinishBattle(ctx, matchedLoot)
@@ -194,6 +217,27 @@ class HomeFarmEngine {
             }
 
             val latestCal = ctx.calibration
+
+            // FAST MODE ("Đủ quân là chiến ngay"): skip all loot/storage/Next conditions and attack Base #1 immediately!
+            if (cfg.attackWhenArmyReady) {
+                val quickLoot = scoutAnalysis.preParsedLoot ?: LootReading()
+                val liveCards = ctx.withFrame { frame ->
+                    AutoTroopBarDetector.detectAvailableCards(frame, latestCal, ctx.ocrEngine)
+                }.orEmpty()
+                if (liveCards.isEmpty()) {
+                    BotStateStore.log("Không thấy quân trên thanh thả lính — quay về làng chờ có quân.", LogLevel.WARN)
+                    ctx.tap(latestCal.endBattleButton, delayAfter = false)
+                    ctx.sleep(900L)
+                    return null
+                }
+                BotStateStore.updateStats { it.copy(lastScannedLoot = quickLoot) }
+                BotStateStore.setAction(
+                    "Đủ quân (${liveCards.size} ô) — chiến ngay nhà #$attempt!",
+                    GameScreenState.BATTLE_SCOUT,
+                )
+                return quickLoot
+            }
+
             // Instant zero-extra-capture loot check when pre-parsed from scout frame; fallback OCR only if missing!
             val loot = scoutAnalysis.preParsedLoot?.takeIf { it.isValid } ?: ctx.withFrame { frame ->
                 val primary = ctx.screenDetector.readEnemyLoot(frame, latestCal)

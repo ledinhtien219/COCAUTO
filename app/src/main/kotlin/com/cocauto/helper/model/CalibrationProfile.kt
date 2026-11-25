@@ -61,7 +61,7 @@ data class CalibrationProfile(
     val armyConfirmAttackButton: NormPoint = NormPoint(0.826f, 0.900f),
     val builderBadgeButton: NormPoint = NormPoint(0.885f, 0.765f),
     val builderBadgeRoi: NormRect = NormRect(0.845f, 0.715f, 0.920f, 0.805f),
-    val builderSuggestionsRoi: NormRect = NormRect(0.450f, 0.140f, 0.945f, 0.720f),
+    val builderSuggestionsRoi: NormRect = NormRect(0.675f, 0.085f, 0.965f, 0.865f),
     val upgradeActionButton: NormPoint = NormPoint(0.560f, 0.840f),
     val upgradeWallElixirButton: NormPoint = NormPoint(0.640f, 0.840f),
     val upgradeConfirmButton: NormPoint = NormPoint(0.500f, 0.785f),
@@ -159,7 +159,7 @@ data class CalibrationProfile(
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 5
+        const val CURRENT_SCHEMA_VERSION = 6
 
         fun forScreenDimensions(width: Int, height: Int): CalibrationProfile {
             val landscapeW = maxOf(width, height).coerceAtLeast(1)

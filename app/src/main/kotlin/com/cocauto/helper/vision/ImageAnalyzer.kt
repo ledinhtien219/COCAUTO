@@ -136,6 +136,7 @@ object ImageAnalyzer {
                     CurrencyType.GOLD -> h in 30f..62f && s >= 0.48f && v >= 0.55f
                     CurrencyType.ELIXIR -> h in 275f..338f && s >= 0.42f && v >= 0.42f
                     CurrencyType.DARK_ELIXIR -> h in 205f..285f && s >= 0.18f && v in 0.16f..0.48f
+                    CurrencyType.GEMS -> false
                     CurrencyType.UNKNOWN -> s >= 0.45f && v >= 0.50f
                 }
                 if (isFilled) {
@@ -201,12 +202,13 @@ object ImageAnalyzer {
     }
 
     /**
-     * Identifies whether a cost icon right next to a price text is Gold, Elixir, or Dark Elixir
+     * Identifies whether a cost icon right next to a price text is Gold, Elixir, Dark Elixir, or Gems
      * by examining HSV pixel votes slightly to the right/around [costBounds].
      */
     fun detectCurrencyForCost(frame: Bitmap, costBounds: NormRect): CurrencyType {
+        if (frame.isRecycled || frame.width < 10 || frame.height < 10) return CurrencyType.UNKNOWN
         val iconRect = NormRect(
-            left = (costBounds.right - 0.005f).coerceIn(0f, 0.96f),
+            left = (costBounds.right - 0.004f).coerceIn(0f, 0.96f),
             top = (costBounds.top - 0.008f).coerceIn(0f, 0.96f),
             right = (costBounds.right + 0.042f).coerceIn(0.02f, 0.995f),
             bottom = (costBounds.bottom + 0.008f).coerceIn(0.02f, 0.995f),
@@ -215,6 +217,7 @@ object ImageAnalyzer {
         val hsv = FloatArray(3)
         var goldVotes = 0
         var elixirVotes = 0
+        var gemVotes = 0
         var darkVotes = 0
         val startX = (iconRect.left * frame.width).toInt().coerceIn(0, frame.width - 1)
         val endX = (iconRect.right * frame.width).toInt().coerceIn(startX + 1, frame.width)
@@ -233,6 +236,7 @@ object ImageAnalyzer {
                 val s = hsv[1]
                 val v = hsv[2]
                 when {
+                    h in 95f..158f && s >= 0.45f && v >= 0.45f -> gemVotes++
                     h in 32f..64f && s >= 0.45f && v >= 0.55f -> goldVotes++
                     (h in 275f..340f) && s >= 0.38f && v >= 0.40f -> elixirVotes++
                     v in 0.04f..0.28f && s <= 0.45f -> darkVotes++
@@ -243,11 +247,47 @@ object ImageAnalyzer {
         }
 
         return when {
+            gemVotes >= 5 && gemVotes >= goldVotes && gemVotes >= elixirVotes -> CurrencyType.GEMS
             goldVotes >= 6 && goldVotes >= elixirVotes -> CurrencyType.GOLD
             elixirVotes >= 6 && elixirVotes > goldVotes -> CurrencyType.ELIXIR
             darkVotes >= 14 -> CurrencyType.DARK_ELIXIR
             else -> CurrencyType.UNKNOWN
         }
+    }
+
+    /**
+     * Checks whether an upgrade price label (e.g. "200 000" or "1 000") is rendered in Clash of Clans's
+     * bright coral/red unaffordable text color (meaning the player lacks enough resources right now).
+     */
+    fun isCostTextRedUnaffordable(frame: Bitmap, costBounds: NormRect): Boolean {
+        if (frame.isRecycled || frame.width < 10 || frame.height < 10) return false
+        val norm = costBounds.normalized()
+        val startX = (norm.left * frame.width).toInt().coerceIn(0, frame.width - 1)
+        val endX = (norm.right * frame.width).toInt().coerceIn(startX + 1, frame.width)
+        val startY = (norm.top * frame.height).toInt().coerceIn(0, frame.height - 1)
+        val endY = (norm.bottom * frame.height).toInt().coerceIn(startY + 1, frame.height)
+
+        val hsv = FloatArray(3)
+        var redVotes = 0
+        var total = 0
+        val cols = 12
+        val rows = 6
+
+        for (r in 0 until rows) {
+            val py = (startY + ((endY - startY) * (r + 0.5f) / rows)).toInt().coerceIn(0, frame.height - 1)
+            for (c in 0 until cols) {
+                val px = (startX + ((endX - startX) * (c + 0.5f) / cols)).toInt().coerceIn(0, frame.width - 1)
+                Color.colorToHSV(frame.getPixel(px, py), hsv)
+                val h = hsv[0]
+                val s = hsv[1]
+                val v = hsv[2]
+                total++
+                if ((h <= 18f || h >= 342f) && s >= 0.42f && v >= 0.55f) {
+                    redVotes++
+                }
+            }
+        }
+        return total > 0 && (redVotes >= 5 || redVotes.toFloat() / total >= 0.08f)
     }
 
     /**

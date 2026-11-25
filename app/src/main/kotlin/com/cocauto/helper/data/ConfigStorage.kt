@@ -57,6 +57,31 @@ class ConfigStorage(context: Context) {
                     )
                     changed = true
                 }
+                // One-time migration from v2.2.x -> v2.3.0:
+                // 1) Farm: attack immediately when army is ready (bypass strict loot/storage gates)
+                // 2) Upgrade: shortest-time buildings first -> remaining buildings -> walls last fitting Gold/Elixir
+                if (!raw.contains("\"attackWhenArmyReady\"")) {
+                    val mergedSkipKeywords = (loaded.upgrade.skipBuildingKeywords + listOf("Lều Thợ xây", "Builder's Hut"))
+                        .distinct()
+                    loaded = loaded.copy(
+                        homeFarm = loaded.homeFarm.copy(
+                            attackWhenArmyReady = true,
+                            stopWhenStorageFull = false,
+                            postBattleCooldownSec = 0,
+                        ),
+                        upgrade = loaded.upgrade.copy(
+                            upgradePriority = com.cocauto.helper.model.UpgradePriorityOrder.SHORTEST_TIME_FIRST,
+                            prioritizeNewBuildingsFirst = false,
+                            reserveBuildersForWalls = 0,
+                            minKeepGold = minOf(loaded.upgrade.minKeepGold, 10_000L),
+                            minKeepElixir = minOf(loaded.upgrade.minKeepElixir, 10_000L),
+                            wallGoldThreshold = minOf(loaded.upgrade.wallGoldThreshold, 50_000L),
+                            wallElixirThreshold = minOf(loaded.upgrade.wallElixirThreshold, 50_000L),
+                            skipBuildingKeywords = mergedSkipKeywords,
+                        ),
+                    )
+                    changed = true
+                }
                 if (changed) saveConfig(loaded)
                 loaded
             } else {

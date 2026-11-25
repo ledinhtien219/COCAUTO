@@ -96,7 +96,7 @@ class ResourceParserTest {
             OcrTextLine("3 500 000", NormRect(0.52f, 0.41f, 0.62f, 0.44f)),
         )
 
-        val candidates = ResourceParser.parseUpgradeCandidates(ocrLines) { CurrencyType.GOLD }
+        val candidates = ResourceParser.parseUpgradeCandidates(ocrLines, currencyResolver = { CurrencyType.GOLD })
         assertEquals(4, candidates.size)
         assertTrue(candidates.first { it.name.contains("Wall") }.isWall)
 
@@ -222,7 +222,7 @@ class ResourceParserTest {
             OcrTextLine("Pháo Đại Bác", NormRect(0.50f, 0.36f, 0.68f, 0.39f)),
             OcrTextLine("10 000", NormRect(0.75f, 0.36f, 0.85f, 0.39f)),
         )
-        val candidates = ResourceParser.parseUpgradeCandidates(lines) { CurrencyType.GOLD }
+        val candidates = ResourceParser.parseUpgradeCandidates(lines, currencyResolver = { CurrencyType.GOLD })
         assertTrue(candidates.first { it.name == "Súng Cối" }.isNewBuilding)
         assertFalse(candidates.first { it.name == "Pháo Đại Bác" }.isNewBuilding)
 
@@ -237,5 +237,128 @@ class ResourceParserTest {
         val selected = ResourceParser.selectBestBuildingUpgrade(candidates, home, cfg)
         assertEquals("Súng Cối", selected?.name)
         assertTrue(selected?.isNewBuilding == true)
+    }
+
+    @Test
+    fun parseUpgradeDurationSeconds_handlesVietnameseAndEnglishFormats() {
+        assertEquals(0L, ResourceParser.parseUpgradeDurationSeconds("Tức thì"))
+        assertEquals(0L, ResourceParser.parseUpgradeDurationSeconds("Instant"))
+        assertEquals(900L, ResourceParser.parseUpgradeDurationSeconds("15ph"))
+        assertEquals(3_600L, ResourceParser.parseUpgradeDurationSeconds("1giờ"))
+        assertEquals(14_400L, ResourceParser.parseUpgradeDurationSeconds("4giờ"))
+        assertEquals(868L, ResourceParser.parseUpgradeDurationSeconds("14ph 28gi"))
+        assertEquals(10_440L, ResourceParser.parseUpgradeDurationSeconds("2giờ 54ph"))
+        assertEquals(129_600L, ResourceParser.parseUpgradeDurationSeconds("1ng 12giờ"))
+        assertEquals(108_000L, ResourceParser.parseUpgradeDurationSeconds("1d 6h"))
+        assertEquals(5_400L, ResourceParser.parseUpgradeDurationSeconds("1h 30m"))
+        assertNull(ResourceParser.parseUpgradeDurationSeconds("Cấp 5"))
+        assertNull(ResourceParser.parseUpgradeDurationSeconds("200 000"))
+    }
+
+    @Test
+    fun parse2026Sidebar_skipsInProgressAndGemsAndPicksShortestAffordableThenWallsLast() {
+        // Mirrors the exact 2026 CoC "Công trình và Tường" right-hand sidebar layout
+        val sidebarLines = listOf(
+            // Top in-progress rows (NO cost row below -> must be skipped!)
+            OcrTextLine("Tháp Cung thủ", NormRect(0.70f, 0.105f, 0.82f, 0.130f)),
+            OcrTextLine("14ph 28gi", NormRect(0.87f, 0.105f, 0.94f, 0.130f)),
+            OcrTextLine("Súng cối", NormRect(0.70f, 0.165f, 0.80f, 0.190f)),
+            OcrTextLine("2giờ 54ph", NormRect(0.87f, 0.165f, 0.94f, 0.190f)),
+            // Divider
+            OcrTextLine("Đã lọc", NormRect(0.79f, 0.290f, 0.86f, 0.312f)),
+            // Card 1: 4giờ, 200 000 Gold (RED unaffordable) + description prose
+            OcrTextLine("Tháp Thổi khí", NormRect(0.73f, 0.340f, 0.83f, 0.362f)),
+            OcrTextLine("4giờ", NormRect(0.90f, 0.340f, 0.94f, 0.362f)),
+            OcrTextLine("Mới", NormRect(0.73f, 0.376f, 0.77f, 0.398f)),
+            OcrTextLine("200 000", NormRect(0.87f, 0.376f, 0.94f, 0.398f)),
+            OcrTextLine("Thổi bay những kẻ tấn công trên không một cách thô bạo.", NormRect(0.70f, 0.415f, 0.94f, 0.438f)),
+            // Card 2: 1giờ, 100 000 Gold (affordable)
+            OcrTextLine("Tháp Pháp sư", NormRect(0.73f, 0.495f, 0.83f, 0.517f)),
+            OcrTextLine("1giờ", NormRect(0.90f, 0.495f, 0.94f, 0.517f)),
+            OcrTextLine("Mới", NormRect(0.73f, 0.531f, 0.77f, 0.553f)),
+            OcrTextLine("100 000", NormRect(0.87f, 0.531f, 0.94f, 0.553f)),
+            // Card 3: 30ph, 45 000 Gold (SHORTER & affordable -> MUST WIN FIRST!)
+            OcrTextLine("Pháo Đại Bác", NormRect(0.73f, 0.590f, 0.83f, 0.612f)),
+            OcrTextLine("30ph", NormRect(0.90f, 0.590f, 0.94f, 0.612f)),
+            OcrTextLine("Cấp 5", NormRect(0.73f, 0.626f, 0.78f, 0.648f)),
+            OcrTextLine("45 000", NormRect(0.87f, 0.626f, 0.94f, 0.648f)),
+            // Card 4: Builder's Hut costing 1 000 GEMS -> MUST NEVER BE CHOSEN!
+            OcrTextLine("Lều Thợ xây", NormRect(0.73f, 0.685f, 0.83f, 0.707f)),
+            OcrTextLine("Mới", NormRect(0.73f, 0.721f, 0.77f, 0.743f)),
+            OcrTextLine("1 000", NormRect(0.89f, 0.721f, 0.94f, 0.743f)),
+            // Card 5: Wall costing 30 000 Gold -> excluded from buildings, selected LAST by selectBestWallCandidate!
+            OcrTextLine("Tường (x50)", NormRect(0.73f, 0.780f, 0.83f, 0.802f)),
+            OcrTextLine("Cấp 5", NormRect(0.73f, 0.816f, 0.78f, 0.838f)),
+            OcrTextLine("30 000", NormRect(0.88f, 0.816f, 0.94f, 0.838f)),
+        )
+
+        val candidates = ResourceParser.parseUpgradeCandidates(
+            lines = sidebarLines,
+            currencyResolver = { line ->
+                if (line.text.trim() == "1 000") CurrencyType.GEMS else CurrencyType.GOLD
+            },
+            redCostResolver = { line ->
+                line.text.trim() == "200 000" || line.text.trim() == "1 000"
+            },
+        )
+
+        // In-progress rows & prose description must NOT become candidates
+        assertEquals(5, candidates.size)
+        assertFalse(candidates.any { it.name.contains("Tháp Cung thủ") })
+        assertFalse(candidates.any { it.name.contains("Súng cối") })
+        assertFalse(candidates.any { it.name.contains("Thổi bay") })
+
+        val home = HomeResources(gold = 155_886L, elixir = 692_607L, darkElixir = 0L)
+        val cfg = AutoUpgradeConfig() // Defaults: SHORTEST_TIME_FIRST, minKeep=10k, wallThreshold=50k
+
+        // 1st pick: shortest-time affordable building ("Pháo Đại Bác", 30ph)
+        val firstPick = ResourceParser.selectBestBuildingUpgrade(candidates, home, cfg)
+        assertNotNull(firstPick)
+        assertEquals("Pháo Đại Bác", firstPick?.name)
+        assertEquals(1_800L, firstPick?.durationSeconds)
+
+        // 2nd pick (after Pháo Đại Bác is upgraded, remaining Gold = 110_886): next shortest ("Tháp Pháp sư", 1giờ, 100k)
+        val remainingCandidates = candidates.filterNot { it.name == "Pháo Đại Bác" }
+        val secondHome = HomeResources(gold = 110_886L, elixir = 692_607L, darkElixir = 0L)
+        val secondPick = ResourceParser.selectBestBuildingUpgrade(remainingCandidates, secondHome, cfg)
+        assertNotNull(secondPick)
+        assertEquals("Tháp Pháp sư", secondPick?.name)
+        assertTrue(secondPick?.isNewBuilding == true)
+
+        // 3rd pick (only 60_000 Gold left -> no affordable non-wall buildings remain, Gems rejected -> null!)
+        val lowGoldHome = HomeResources(gold = 60_000L, elixir = 692_607L, darkElixir = 0L)
+        val thirdBuildingPick = ResourceParser.selectBestBuildingUpgrade(remainingCandidates, lowGoldHome, cfg)
+        assertNull(thirdBuildingPick)
+
+        // LAST: with 60_000 Gold and 1 free builder, Walls (30_000 Gold) ARE upgraded!
+        val wallPick = ResourceParser.selectBestWallCandidate(
+            candidates = remainingCandidates,
+            home = lowGoldHome,
+            builderStatus = BuilderStatus(freeBuilders = 1, totalBuilders = 3),
+            config = cfg,
+        )
+        assertNotNull(wallPick)
+        assertEquals("Tường (x50)", wallPick?.first?.name)
+        assertEquals(CurrencyType.GOLD, wallPick?.second)
+    }
+
+    @Test
+    fun parseArmyCampCapacity_detectsCampAndIgnoresBuilderBadge() {
+        val armyScreen = listOf(
+            OcrTextLine("Quân đội của tôi", NormRect(0.10f, 0.08f, 0.30f, 0.12f)),
+            OcrTextLine("115/115", NormRect(0.12f, 0.16f, 0.22f, 0.20f)),
+        )
+        assertEquals(115 to 115, ResourceParser.parseArmyCampCapacity(armyScreen))
+
+        val emptyArmyScreen = listOf(
+            OcrTextLine("0/135", NormRect(0.12f, 0.16f, 0.22f, 0.20f)),
+        )
+        assertEquals(0 to 135, ResourceParser.parseArmyCampCapacity(emptyArmyScreen))
+
+        val homeHudOnly = listOf(
+            OcrTextLine("0/3", NormRect(0.85f, 0.74f, 0.90f, 0.78f)),
+            OcrTextLine("1/1", NormRect(0.91f, 0.74f, 0.95f, 0.78f)),
+        )
+        assertNull(ResourceParser.parseArmyCampCapacity(homeHudOnly))
     }
 }

@@ -1,5 +1,6 @@
 package com.cocauto.helper.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,14 +12,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cocauto.helper.model.BotConfig
 import com.cocauto.helper.model.DeployEdge
@@ -31,6 +37,7 @@ import com.cocauto.helper.ui.components.LongNumberField
 import com.cocauto.helper.ui.components.SectionCard
 import com.cocauto.helper.ui.components.SettingSwitchRow
 import com.cocauto.helper.ui.components.SingleChoiceChipRow
+import com.cocauto.helper.ui.theme.ClashEmerald
 import com.cocauto.helper.ui.theme.ClashGold
 import com.cocauto.helper.ui.theme.TextSecondary
 
@@ -54,94 +61,34 @@ fun FarmTab(
         // 1. Home Village Loot & Collection
         SectionCard(
             title = "Auto Farm Nhà Chính (Clash Anytime)",
-            subtitle = "Thu hoạch tài nguyên và lọc nhà giàu bằng OCR trực tiếp trên máy",
+            subtitle = "Mặc định chỉ cần đủ quân là tự đánh ngay — không chờ đủ các điều kiện lọc Vàng/Dầu",
         ) {
-            Text(
-                text = "Cài nhanh theo cấp Nhà Chính (TH):",
-                style = MaterialTheme.typography.labelMedium,
-                color = TextSecondary,
+            SettingSwitchRow(
+                title = "Đủ quân là chiến ngay (Bỏ qua lọc tài nguyên)",
+                subtitle = "Bật: cứ có quân là đánh ngay nhà đầu tiên. Tắt: lọc nhà theo ngưỡng Vàng/Dầu bên dưới",
+                checked = home.attackWhenArmyReady,
+                onCheckedChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(attackWhenArmyReady = v)) } },
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AssistChip(
-                    onClick = {
-                        onUpdateConfig {
-                            it.copy(
-                                homeFarm = it.homeFarm.copy(
-                                    lootMatchMode = LootMatchMode.COMBINED_SUM,
-                                    minCombinedGoldElixir = 40_000L,
-                                    minGold = 20_000L,
-                                    minElixir = 20_000L,
-                                    minDarkElixir = 0L,
-                                    troopSlotCount = 4,
-                                    heroSlotIndices = emptySet(),
-                                    spellSlotIndices = emptySet(),
-                                ),
-                            )
-                        }
-                    },
-                    label = { Text("TH 3–6 (40K+)") },
-                )
-                AssistChip(
-                    onClick = {
-                        onUpdateConfig {
-                            it.copy(
-                                homeFarm = it.homeFarm.copy(
-                                    lootMatchMode = LootMatchMode.COMBINED_SUM,
-                                    minCombinedGoldElixir = 250_000L,
-                                    minGold = 120_000L,
-                                    minElixir = 120_000L,
-                                    minDarkElixir = 500L,
-                                    troopSlotCount = 4,
-                                    heroSlotIndices = setOf(5, 6),
-                                    spellSlotIndices = setOf(7, 8),
-                                ),
-                            )
-                        }
-                    },
-                    label = { Text("TH 7–9 (250K+)") },
-                )
-                AssistChip(
-                    onClick = {
-                        onUpdateConfig {
-                            it.copy(
-                                homeFarm = it.homeFarm.copy(
-                                    lootMatchMode = LootMatchMode.COMBINED_SUM,
-                                    minCombinedGoldElixir = 600_000L,
-                                    minGold = 300_000L,
-                                    minElixir = 300_000L,
-                                    minDarkElixir = 2_500L,
-                                    troopSlotCount = 4,
-                                    heroSlotIndices = setOf(5, 6, 7),
-                                    spellSlotIndices = setOf(8, 9),
-                                ),
-                            )
-                        }
-                    },
-                    label = { Text("TH 10–12 (600K+)") },
-                )
-                AssistChip(
-                    onClick = {
-                        onUpdateConfig {
-                            it.copy(
-                                homeFarm = it.homeFarm.copy(
-                                    lootMatchMode = LootMatchMode.COMBINED_SUM,
-                                    minCombinedGoldElixir = 900_000L,
-                                    minGold = 450_000L,
-                                    minElixir = 450_000L,
-                                    minDarkElixir = 4_500L,
-                                    troopSlotCount = 4,
-                                    heroSlotIndices = setOf(5, 6, 7, 8),
-                                    spellSlotIndices = setOf(9, 10),
-                                ),
-                            )
-                        }
-                    },
-                    label = { Text("TH 13+ (900K+)") },
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
 
+            if (home.attackWhenArmyReady) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF102A18)),
+                    border = BorderStroke(1.dp, ClashEmerald.copy(alpha = 0.55f)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "Chế độ Chiến nhanh đang BẬT: Chỉ cần đủ quân trên thanh lính là tự thả quân đánh ngay, đánh xong tự Về làng chạy trận tiếp theo!",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = ClashEmerald,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
             SettingSwitchRow(
                 title = "Thu hoạch mỏ Vàng / Dầu / Dầu Đen",
                 subtitle = "Tự quét bong bóng tài nguyên trên bản đồ làng",
@@ -160,69 +107,157 @@ fun FarmTab(
                 onCheckedChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(autoAttack = v)) } },
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Điều kiện lọc tài nguyên nhà địch:", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-            Spacer(modifier = Modifier.height(4.dp))
-            SingleChoiceChipRow(
-                options = listOf(
-                    LootMatchMode.COMBINED_SUM to "Tổng Vàng + Dầu",
-                    LootMatchMode.ALL_MATCH to "Đạt tất cả",
-                    LootMatchMode.ANY_MATCH to "Đạt 1 trong 3",
-                ),
-                selected = home.lootMatchMode,
-                onSelect = { m -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(lootMatchMode = m)) } },
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-            if (home.lootMatchMode == LootMatchMode.COMBINED_SUM) {
-                LongNumberField(
-                    label = "Tổng Vàng + Dầu tối thiểu",
-                    value = home.minCombinedGoldElixir,
-                    onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minCombinedGoldElixir = v)) } },
-                )
+            if (!home.attackWhenArmyReady) {
                 Spacer(modifier = Modifier.height(8.dp))
-            } else {
+                Text(
+                    text = "Cài nhanh ngưỡng lọc theo cấp Nhà Chính (TH):",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AssistChip(
+                        onClick = {
+                            onUpdateConfig {
+                                it.copy(
+                                    homeFarm = it.homeFarm.copy(
+                                        lootMatchMode = LootMatchMode.COMBINED_SUM,
+                                        minCombinedGoldElixir = 40_000L,
+                                        minGold = 20_000L,
+                                        minElixir = 20_000L,
+                                        minDarkElixir = 0L,
+                                        troopSlotCount = 4,
+                                        heroSlotIndices = emptySet(),
+                                        spellSlotIndices = emptySet(),
+                                    ),
+                                )
+                            }
+                        },
+                        label = { Text("TH 3–6 (40K+)") },
+                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateConfig {
+                                it.copy(
+                                    homeFarm = it.homeFarm.copy(
+                                        lootMatchMode = LootMatchMode.COMBINED_SUM,
+                                        minCombinedGoldElixir = 250_000L,
+                                        minGold = 120_000L,
+                                        minElixir = 120_000L,
+                                        minDarkElixir = 500L,
+                                        troopSlotCount = 4,
+                                        heroSlotIndices = setOf(5, 6),
+                                        spellSlotIndices = setOf(7, 8),
+                                    ),
+                                )
+                            }
+                        },
+                        label = { Text("TH 7–9 (250K+)") },
+                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateConfig {
+                                it.copy(
+                                    homeFarm = it.homeFarm.copy(
+                                        lootMatchMode = LootMatchMode.COMBINED_SUM,
+                                        minCombinedGoldElixir = 600_000L,
+                                        minGold = 300_000L,
+                                        minElixir = 300_000L,
+                                        minDarkElixir = 2_500L,
+                                        troopSlotCount = 4,
+                                        heroSlotIndices = setOf(5, 6, 7),
+                                        spellSlotIndices = setOf(8, 9),
+                                    ),
+                                )
+                            }
+                        },
+                        label = { Text("TH 10–12 (600K+)") },
+                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateConfig {
+                                it.copy(
+                                    homeFarm = it.homeFarm.copy(
+                                        lootMatchMode = LootMatchMode.COMBINED_SUM,
+                                        minCombinedGoldElixir = 900_000L,
+                                        minGold = 450_000L,
+                                        minElixir = 450_000L,
+                                        minDarkElixir = 4_500L,
+                                        troopSlotCount = 4,
+                                        heroSlotIndices = setOf(5, 6, 7, 8),
+                                        spellSlotIndices = setOf(9, 10),
+                                    ),
+                                )
+                            }
+                        },
+                        label = { Text("TH 13+ (900K+)") },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Điều kiện lọc tài nguyên nhà địch:", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                Spacer(modifier = Modifier.height(4.dp))
+                SingleChoiceChipRow(
+                    options = listOf(
+                        LootMatchMode.COMBINED_SUM to "Tổng Vàng + Dầu",
+                        LootMatchMode.ALL_MATCH to "Đạt tất cả",
+                        LootMatchMode.ANY_MATCH to "Đạt 1 trong 3",
+                    ),
+                    selected = home.lootMatchMode,
+                    onSelect = { m -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(lootMatchMode = m)) } },
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                if (home.lootMatchMode == LootMatchMode.COMBINED_SUM) {
+                    LongNumberField(
+                        label = "Tổng Vàng + Dầu tối thiểu",
+                        value = home.minCombinedGoldElixir,
+                        onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minCombinedGoldElixir = v)) } },
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LongNumberField(
+                            label = "Vàng tối thiểu",
+                            value = home.minGold,
+                            onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minGold = v)) } },
+                            modifier = Modifier.weight(1f),
+                        )
+                        LongNumberField(
+                            label = "Dầu tối thiểu",
+                            value = home.minElixir,
+                            onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minElixir = v)) } },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     LongNumberField(
-                        label = "Vàng tối thiểu",
-                        value = home.minGold,
-                        onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minGold = v)) } },
+                        label = "Dầu Đen tối thiểu (0 = bỏ qua)",
+                        value = home.minDarkElixir,
+                        onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minDarkElixir = v)) } },
                         modifier = Modifier.weight(1f),
                     )
-                    LongNumberField(
-                        label = "Dầu tối thiểu",
-                        value = home.minElixir,
-                        onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minElixir = v)) } },
+                    IntNumberField(
+                        label = "Số lần Next tối đa",
+                        value = home.maxNextCount,
+                        min = 1,
+                        max = 200,
+                        onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(maxNextCount = v)) } },
                         modifier = Modifier.weight(1f),
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LongNumberField(
-                    label = "Dầu Đen tối thiểu (0 = bỏ qua)",
-                    value = home.minDarkElixir,
-                    onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(minDarkElixir = v)) } },
-                    modifier = Modifier.weight(1f),
-                )
-                IntNumberField(
-                    label = "Số lần Next tối đa",
-                    value = home.maxNextCount,
-                    min = 1,
-                    max = 200,
-                    onValueChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(maxNextCount = v)) } },
-                    modifier = Modifier.weight(1f),
+                Spacer(modifier = Modifier.height(4.dp))
+                SettingSwitchRow(
+                    title = "Đánh luôn nếu chạm giới hạn Next",
+                    subtitle = "Nếu tắt, bot sẽ quay về nhà chính rồi tìm lại",
+                    checked = home.attackWhenMaxNextReached,
+                    onCheckedChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(attackWhenMaxNextReached = v)) } },
                 )
             }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            SettingSwitchRow(
-                title = "Đánh luôn nếu chạm giới hạn Next",
-                subtitle = "Nếu tắt, bot sẽ quay về nhà chính rồi tìm lại",
-                checked = home.attackWhenMaxNextReached,
-                onCheckedChange = { v -> onUpdateConfig { it.copy(homeFarm = it.homeFarm.copy(attackWhenMaxNextReached = v)) } },
-            )
         }
 
         // 1.5. Auto Stop / Pause when Storages are Full

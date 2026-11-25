@@ -35,7 +35,15 @@ object ResourceParser {
 
     private val diacriticRegex = Regex("\\p{InCombiningDiacriticalMarks}+")
     private val builderRatioRegex = Regex("""([0-9OoIl|])\s*/\s*([1-7OoIl|])""")
+    private val armyCampRatioRegex = Regex("""([0-9OoIl|]{1,3})\s*/\s*([0-9OoIl|]{2,3})""")
     private val numericClusterRegex = Regex("""[0-9OoIl|SsBbZz][0-9OoIl|SsBbZz ,.'`]{0,14}""")
+    private val durationUnitRegex = Regex(
+        """(\d+)\s*(ngay|ng|days?|d|gio|hours?|hrs?|h|phut|ph|mins?|m|giay|gi|secs?|s)\b""",
+    )
+    private val ocrLeadingOneBeforeUnitRegex = Regex(
+        """(?<![a-z0-9])[il|](?=\s*(?:ngay|ng|days?|d\b|gio|hours?|hrs?|h\b|phut|ph|mins?|m\b|giay|gi|secs?|s\b))""",
+    )
+    private val subLabelOnlyRegex = Regex("""^(moi|new|cap\s*\d+|level\s*\d+|lv\.?\s*\d+)$""")
 
     /**
      * Strips Vietnamese diacritics and lowercases text for reliable keyword matching.
@@ -198,108 +206,305 @@ object ResourceParser {
     }
 
     /**
-     * Groups OCR lines inside the Builder Suggested Upgrades dropdown or Lab list into structured candidates.
+     * Parses an Army Camp capacity ratio like "115/115", "0/135", or "200 / 200" from the Army Confirm
+     * ("Quân đội của tôi") screen while ignoring Builder ("0/3") and Lab ("0/1") badges (max < 20).
+     */
+    fun parseArmyCampCapacity(lines: List<OcrTextLine>): Pair<Int, Int>? {
+        for (line in lines) {
+            for (match in armyCampRatioRegex.findAll(line.text)) {
+                val cur = cleanSmallDigits(match.groupValues[1]) ?: continue
+                val max = cleanSmallDigits(match.groupValues[2]) ?: continue
+                if (max in 20..400 && cur in 0..max) {
+                    return cur to max
+                }
+            }
+        }
+        return null
+    }
+
+    private fun cleanSmallDigits(raw: String): Int? {
+        val sb = StringBuilder(raw.length)
+        for (ch in raw) {
+            when (ch) {
+                in '0'..'9' -> sb.append(ch)
+                'O', 'o' -> sb.append('0')
+                'I', 'l', '|' -> sb.append('1')
+            }
+        }
+        return sb.toString().toIntOrNull()
+    }
+
+    /**
+     * Parses a Clash of Clans upgrade duration string (Vietnamese & English) into total seconds.
+     * Examples: "15ph" -> 900, "1giờ" -> 3600, "2giờ 30ph" -> 9000, "1ng 12giờ" -> 129600,
+     * "45s" -> 45, "1d 6h" -> 108000, "Tức thì" / "Instant" -> 0.
+     */
+    fun parseUpgradeDurationSeconds(raw: String): Long? {
+        val norm = normalizeForMatch(raw)
+        if (norm.isBlank()) return null
+        if (norm.contains("tuc thi") || norm.contains("instant")) return 0L
+
+        val cleaned = ocrLeadingOneBeforeUnitRegex.replace(norm, "1")
+        val matches = durationUnitRegex.findAll(cleaned).toList()
+        if (matches.isEmpty()) return null
+
+        var totalSeconds = 0L
+        for (m in matches) {
+            val amount = m.groupValues[1].toLongOrNull() ?: continue
+            val multiplier = when (m.groupValues[2]) {
+                "ngay", "ng", "day", "days", "d" -> 86_400L
+                "gio", "hour", "hours", "hr", "hrs", "h" -> 3_600L
+                "phut", "ph", "min", "mins", "m" -> 60L
+                "giay", "gi", "sec", "secs", "s" -> 1L
+                else -> 0L
+            }
+            totalSeconds += amount * multiplier
+        }
+        return totalSeconds.takeIf { it >= 0L }
+    }
+
+    fun formatDurationShort(seconds: Long): String {
+        if (seconds !in 0L..(365L * 86_400L)) return "?"
+        if (seconds == 0L) return "tức thì"
+        val days = seconds / 86_400L
+        val hours = (seconds % 86_400L) / 3_600L
+        val mins = (seconds % 3_600L) / 60L
+        val secs = seconds % 60L
+        return when {
+            days > 0L && hours > 0L -> "${days}ng ${hours}giờ"
+            days > 0L -> "${days}ng"
+            hours > 0L && mins > 0L -> "${hours}giờ ${mins}ph"
+            hours > 0L -> "${hours}giờ"
+            mins > 0L -> "${mins}ph"
+            else -> "${secs}gi"
+        }
+    }
+
+    private fun stripDurationTokens(raw: String): String {
+        val norm = normalizeForMatch(raw)
+        if (norm.contains("tuc thi") || norm.contains("instant")) return ""
+        val cleaned = ocrLeadingOneBeforeUnitRegex.replace(norm, "1")
+        return if (durationUnitRegex.containsMatchIn(cleaned)) {
+            val stripped = durationUnitRegex.replace(cleaned, "").trim()
+            if (stripped.isBlank()) "" else raw.replace(
+                Regex("""(?i)\b[0-9Il|]+\s*(ngày|ng|days?|d|giờ|gio|hours?|hrs?|h|phút|phut|ph|mins?|m|giây|giay|gi|secs?|s)\b"""),
+                "",
+            ).replace(Regex("\\s+"), " ").trim()
+        } else {
+            raw.trim()
+        }
+    }
+
+    private data class ParsedDrawerRow(
+        val items: List<OcrTextLine>,
+        val centerY: Float,
+        val fullNorm: String,
+        val cleanName: String,
+        val costItem: OcrTextLine?,
+        val costValue: Long?,
+        val durationSec: Long?,
+        val isSubLabelOnly: Boolean,
+        val isNewTag: Boolean,
+        val isSectionNew: Boolean,
+        val isSectionOther: Boolean,
+    )
+
+    /**
+     * Groups OCR lines inside the 2026 Builder "Công trình và Tường" right-hand sidebar (2-line cards:
+     * Name + Duration on row 1, Mới/Cấp X + Cost on row 2) OR classic 1-line Builder/Lab lists into
+     * structured [UpgradeCandidate]s, automatically skipping standalone in-progress timer rows & descriptions.
      */
     fun parseUpgradeCandidates(
         lines: List<OcrTextLine>,
         currencyResolver: (OcrTextLine) -> CurrencyType = { CurrencyType.UNKNOWN },
+        redCostResolver: (OcrTextLine) -> Boolean = { false },
     ): List<UpgradeCandidate> {
         if (lines.isEmpty()) return emptyList()
 
-        // Cluster lines belonging to the same horizontal row
-        val rows = mutableListOf<MutableList<OcrTextLine>>()
+        // Cluster lines belonging to the same horizontal row (0.022f separates 2-line 2026 cards cleanly!)
+        val rawRows = mutableListOf<MutableList<OcrTextLine>>()
         for (line in lines.sortedBy { it.bounds.centerY }) {
-            val existingRow = rows.firstOrNull { row ->
-                abs(row.first().bounds.centerY - line.bounds.centerY) <= 0.036f
+            val existingRow = rawRows.firstOrNull { row ->
+                abs(row.first().bounds.centerY - line.bounds.centerY) <= 0.022f
             }
             if (existingRow != null) {
                 existingRow.add(line)
             } else {
-                rows.add(mutableListOf(line))
+                rawRows.add(mutableListOf(line))
             }
         }
 
-        val candidates = mutableListOf<UpgradeCandidate>()
-        var insideNewBuildingSection = false
+        val parsedRows = rawRows.map { row ->
+            val sorted = row.sortedBy { it.bounds.left }
+            val fullText = sorted.joinToString(" ") { it.text.trim() }
+            val fullNorm = normalizeForMatch(fullText)
 
-        for (row in rows) {
-            val sortedLeftToRight = row.sortedBy { it.bounds.left }
-            val fullNorm = normalizeForMatch(sortedLeftToRight.joinToString(" ") { it.text })
-
-            // Track section headers ("New Buildings" / "Xây mới" vs "Suggested Upgrades" / "Đề xuất nâng cấp")
-            if (fullNorm.contains("new building") ||
+            val isSectionNew = fullNorm.contains("new building") ||
                 fullNorm.contains("xay moi") ||
                 fullNorm.contains("cong trinh moi") ||
-                fullNorm.contains("chua xay") ||
-                fullNorm == "new" ||
-                fullNorm == "moi"
-            ) {
-                insideNewBuildingSection = true
-                continue
-            }
-
-            if (fullNorm.contains("suggested") ||
+                fullNorm.contains("chua xay")
+            val isSectionOther = fullNorm.contains("suggested") ||
                 fullNorm.contains("de xuat") ||
                 fullNorm.contains("goi y") ||
                 fullNorm.contains("in progress") ||
                 fullNorm.contains("dang nang") ||
                 fullNorm.contains("other upgrades") ||
                 fullNorm.contains("nang cap khac") ||
-                fullNorm.contains("da loc")
-            ) {
-                insideNewBuildingSection = false
-                continue
-            }
+                fullNorm.contains("da loc") ||
+                fullNorm.contains("cong trinh va tuong") ||
+                fullNorm.contains("buildings and walls")
 
-            // Skip in-progress timer rows like "Tháp Cung thủ 14ph 28gi" or "Kho chứa Tiên dược 3giờ 54ph"
-            if (Regex("""\b\d+\s*(gio|ph|gi|ngay|hr|min|sec|d\b|h\b|m\b)""").containsMatchIn(fullNorm)) {
-                continue
-            }
-
-            var costLine: OcrTextLine? = null
+            var costItem: OcrTextLine? = null
             var costValue: Long? = null
+            var durationSec: Long? = null
             val nameParts = mutableListOf<String>()
 
-            for (item in sortedLeftToRight) {
+            for (item in sorted) {
+                val itemDur = parseUpgradeDurationSeconds(item.text)
+                if (itemDur != null) {
+                    durationSec = itemDur
+                    val remainder = stripDurationTokens(item.text)
+                    if (remainder.isNotBlank()) {
+                        nameParts.add(remainder)
+                    }
+                    continue
+                }
                 val parsedNum = parseResourceNumber(item.text)
                 val letters = item.text.count { it.isLetter() }
                 if (parsedNum != null && parsedNum >= 100L && letters <= 2) {
-                    costLine = item
+                    costItem = item
                     costValue = parsedNum
                 } else if (item.text.isNotBlank()) {
                     nameParts.add(item.text.trim())
                 }
             }
 
-            val name = nameParts.joinToString(" ").trim()
-            if (name.isBlank()) continue
-
-            val normName = normalizeForMatch(name)
-            val isWall = normName.contains("wall") || normName.contains("tuong")
-            val isNewTagged = insideNewBuildingSection ||
+            val cleanName = nameParts.joinToString(" ").trim()
+            val normName = normalizeForMatch(cleanName)
+            val isSubLabelOnly = cleanName.isBlank() || subLabelOnlyRegex.matches(normName)
+            val isNewTag = normName == "moi" ||
+                normName == "new" ||
                 normName.startsWith("new ") ||
                 normName.endsWith(" new") ||
                 normName.contains("(new)") ||
                 normName.contains("xay moi") ||
                 normName.contains("(moi)")
-            val resolvedCost = costValue ?: 0L
-            val currency = costLine?.let(currencyResolver) ?: CurrencyType.UNKNOWN
-            val tapLine = sortedLeftToRight.first()
 
-            candidates.add(
-                UpgradeCandidate(
-                    name = name,
-                    cost = resolvedCost,
-                    currency = currency,
-                    tapPoint = NormPoint(
-                        x = ((sortedLeftToRight.first().bounds.left + sortedLeftToRight.last().bounds.right) * 0.5f)
-                            .coerceIn(0.1f, 0.9f),
-                        y = tapLine.bounds.centerY,
-                    ),
-                    isWall = isWall,
-                    isNewBuilding = isNewTagged && !isWall,
-                )
+            ParsedDrawerRow(
+                items = sorted,
+                centerY = sorted.map { it.bounds.centerY }.average().toFloat(),
+                fullNorm = fullNorm,
+                cleanName = cleanName,
+                costItem = costItem,
+                costValue = costValue,
+                durationSec = durationSec,
+                isSubLabelOnly = isSubLabelOnly,
+                isNewTag = isNewTag,
+                isSectionNew = isSectionNew,
+                isSectionOther = isSectionOther,
             )
+        }
+
+        val candidates = mutableListOf<UpgradeCandidate>()
+        var insideNewBuildingSection = false
+        var idx = 0
+
+        while (idx < parsedRows.size) {
+            val row = parsedRows[idx]
+            if (row.isSectionNew) {
+                insideNewBuildingSection = true
+                idx++
+                continue
+            }
+            if (row.isSectionOther) {
+                insideNewBuildingSection = false
+                idx++
+                continue
+            }
+
+            // Skip bare "Mới"/"New" section header ONLY when it has no cost attached (classic layout)
+            if (row.costItem == null && (row.fullNorm == "new" || row.fullNorm == "moi")) {
+                insideNewBuildingSection = true
+                idx++
+                continue
+            }
+
+            // Case 1: Classic 1-line row containing BOTH building name AND cost on the same line
+            if (!row.isSubLabelOnly && row.cleanName.isNotBlank() && row.costItem != null && row.costValue != null) {
+                val normName = normalizeForMatch(row.cleanName)
+                val isWall = normName.contains("wall") || normName.contains("tuong")
+                val isNew = (insideNewBuildingSection || row.isNewTag) && !isWall
+                val currency = currencyResolver(row.costItem)
+                val isRed = redCostResolver(row.costItem)
+                val dur = row.durationSec ?: if (isWall) 0L else Long.MAX_VALUE
+                candidates.add(
+                    UpgradeCandidate(
+                        name = row.cleanName,
+                        cost = row.costValue,
+                        currency = currency,
+                        tapPoint = NormPoint(
+                            x = ((row.items.first().bounds.left + row.items.last().bounds.right) * 0.5f)
+                                .coerceIn(0.10f, 0.93f),
+                            y = row.centerY,
+                        ),
+                        isWall = isWall,
+                        isNewBuilding = isNew,
+                        durationSeconds = dur,
+                        isUnaffordableRed = isRed,
+                    ),
+                )
+                idx++
+                continue
+            }
+
+            // Case 2: 2026 2-line sidebar card — Row i = Name (+ Duration), Row i+1 = Mới/Cấp X + Cost
+            if (!row.isSubLabelOnly && row.cleanName.isNotBlank() && row.costItem == null) {
+                // Skip prose description lines on expanded cards (e.g. "Thổi bay những kẻ tấn công...")
+                val looksLikeDescription = row.cleanName.length > 42 || row.cleanName.endsWith(".")
+                val nextRow = parsedRows.getOrNull(idx + 1)
+                val canMergeWithNext = !looksLikeDescription &&
+                    nextRow != null &&
+                    !nextRow.isSectionNew &&
+                    !nextRow.isSectionOther &&
+                    (nextRow.centerY - row.centerY) in 0.015f..0.072f &&
+                    nextRow.costItem != null &&
+                    nextRow.costValue != null &&
+                    nextRow.isSubLabelOnly
+
+                if (canMergeWithNext) {
+                    val mergedNext = nextRow!!
+                    val nextCostItem = mergedNext.costItem!!
+                    val nextCostValue = mergedNext.costValue!!
+                    val normName = normalizeForMatch(row.cleanName)
+                    val isWall = normName.contains("wall") || normName.contains("tuong")
+                    val isNew = (insideNewBuildingSection || row.isNewTag || mergedNext.isNewTag) && !isWall
+                    val currency = currencyResolver(nextCostItem)
+                    val isRed = redCostResolver(nextCostItem)
+                    val dur = row.durationSec ?: mergedNext.durationSec ?: if (isWall) 0L else Long.MAX_VALUE
+                    val minLeft = minOf(row.items.first().bounds.left, mergedNext.items.first().bounds.left)
+                    val maxRight = maxOf(row.items.last().bounds.right, mergedNext.items.last().bounds.right)
+                    candidates.add(
+                        UpgradeCandidate(
+                            name = row.cleanName,
+                            cost = nextCostValue,
+                            currency = currency,
+                            tapPoint = NormPoint(
+                                x = ((minLeft + maxRight) * 0.5f).coerceIn(0.10f, 0.93f),
+                                y = ((row.centerY + mergedNext.centerY) * 0.5f).coerceIn(0.08f, 0.88f),
+                            ),
+                            isWall = isWall,
+                            isNewBuilding = isNew,
+                            durationSeconds = dur,
+                            isUnaffordableRed = isRed,
+                        ),
+                    )
+                    idx += 2
+                    continue
+                }
+            }
+
+            // Otherwise: standalone in-progress countdown row (no cost below) or description prose -> skip!
+            idx++
         }
         return candidates
     }
@@ -325,11 +530,13 @@ object ResourceParser {
         currency: CurrencyType,
         config: AutoUpgradeConfig,
     ): Boolean {
+        if (currency == CurrencyType.GEMS) return false
         if (cost <= 0L) return true
         return when (currency) {
             CurrencyType.GOLD -> home.gold >= cost + config.minKeepGold
             CurrencyType.ELIXIR -> home.elixir >= cost + config.minKeepElixir
             CurrencyType.DARK_ELIXIR -> home.darkElixir >= cost + config.minKeepDarkElixir
+            CurrencyType.GEMS -> false
             CurrencyType.UNKNOWN -> {
                 // When currency icon color is uncertain, require either Gold or Elixir to safely cover cost + reserve
                 (home.gold >= cost + config.minKeepGold) || (home.elixir >= cost + config.minKeepElixir)
@@ -339,7 +546,9 @@ object ResourceParser {
 
     /**
      * Selects the best non-wall building action (New Building construction OR existing Building Upgrade)
-     * respecting enabled toggles, new-building priority, blacklist keywords, reserves, and cost order.
+     * respecting enabled toggles, Gems/red-unaffordable rejection, blacklist keywords, reserves, and priority order.
+     * In [UpgradePriorityOrder.SHORTEST_TIME_FIRST], shortest duration buildings win first (tie-broken by cheapest cost),
+     * followed by remaining affordable buildings.
      */
     fun selectBestBuildingUpgrade(
         candidates: List<UpgradeCandidate>,
@@ -348,6 +557,9 @@ object ResourceParser {
     ): UpgradeCandidate? {
         val eligible = candidates.filter { item ->
             !item.isWall &&
+                item.currency != CurrencyType.GEMS &&
+                !item.isUnaffordableRed &&
+                item.cost >= 100L &&
                 ((item.isNewBuilding && config.autoBuildNewBuildings) ||
                     (!item.isNewBuilding && config.autoUpgradeBuildings)) &&
                 !isSkippedByKeywords(item.name, config.skipBuildingKeywords) &&
@@ -362,10 +574,65 @@ object ResourceParser {
         }
 
         return when (config.upgradePriority) {
+            UpgradePriorityOrder.SHORTEST_TIME_FIRST -> pool.minWithOrNull(
+                compareBy<UpgradeCandidate>(
+                    { if (it.hasKnownDuration) it.durationSeconds else Long.MAX_VALUE },
+                    { if (it.cost > 0L) it.cost else Long.MAX_VALUE },
+                ),
+            )
             UpgradePriorityOrder.CHEAPEST_FIRST -> pool.minByOrNull { if (it.cost > 0L) it.cost else Long.MAX_VALUE }
             UpgradePriorityOrder.MOST_EXPENSIVE_FIRST -> pool.maxByOrNull { it.cost }
             UpgradePriorityOrder.TOP_OF_LIST -> pool.first()
         }
+    }
+
+    /**
+     * Selects an affordable Wall ("Tường") candidate from the Builder drawer fitting current Gold/Elixir,
+     * configured thresholds, and reserves — run LAST after all eligible buildings have been upgraded.
+     */
+    fun selectBestWallCandidate(
+        candidates: List<UpgradeCandidate>,
+        home: HomeResources,
+        builderStatus: BuilderStatus,
+        config: AutoUpgradeConfig,
+    ): Pair<UpgradeCandidate, CurrencyType>? {
+        if (!config.autoUpgradeWalls || builderStatus.freeBuilders < 1) return null
+        val wallCandidates = candidates.filter {
+            it.isWall && !it.isUnaffordableRed && it.currency != CurrencyType.GEMS
+        }
+        for (wall in wallCandidates) {
+            val chosenCurrency = when (wall.currency) {
+                CurrencyType.GOLD -> {
+                    val allowed = config.wallCurrencyMode == WallCurrencyMode.GOLD_ONLY ||
+                        config.wallCurrencyMode == WallCurrencyMode.BOTH
+                    if (allowed &&
+                        home.gold >= config.wallGoldThreshold &&
+                        respectsResourceReserve(home, wall.cost, CurrencyType.GOLD, config)
+                    ) {
+                        CurrencyType.GOLD
+                    } else {
+                        null
+                    }
+                }
+                CurrencyType.ELIXIR -> {
+                    val allowed = config.wallCurrencyMode == WallCurrencyMode.ELIXIR_ONLY ||
+                        config.wallCurrencyMode == WallCurrencyMode.BOTH
+                    if (allowed &&
+                        home.elixir >= config.wallElixirThreshold &&
+                        respectsResourceReserve(home, wall.cost, CurrencyType.ELIXIR, config)
+                    ) {
+                        CurrencyType.ELIXIR
+                    } else {
+                        null
+                    }
+                }
+                else -> chooseWallUpgradeCurrency(home, builderStatus, config, estimatedWallCost = wall.cost)
+            }
+            if (chosenCurrency != null) {
+                return wall to chosenCurrency
+            }
+        }
+        return null
     }
 
     /**
@@ -378,6 +645,8 @@ object ResourceParser {
     ): UpgradeCandidate? {
         val eligible = candidates.filter { item ->
             item.cost >= 100L &&
+                item.currency != CurrencyType.GEMS &&
+                !item.isUnaffordableRed &&
                 !isSkippedByKeywords(item.name, config.skipLabKeywords) &&
                 respectsResourceReserve(home, item.cost, item.currency, config)
         }
@@ -390,6 +659,12 @@ object ResourceParser {
         }
 
         return when (config.upgradePriority) {
+            UpgradePriorityOrder.SHORTEST_TIME_FIRST -> prioritized.minWithOrNull(
+                compareBy<UpgradeCandidate>(
+                    { if (it.hasKnownDuration) it.durationSeconds else Long.MAX_VALUE },
+                    { if (it.cost > 0L) it.cost else Long.MAX_VALUE },
+                ),
+            )
             UpgradePriorityOrder.CHEAPEST_FIRST -> prioritized.minByOrNull { if (it.cost > 0L) it.cost else Long.MAX_VALUE }
             UpgradePriorityOrder.MOST_EXPENSIVE_FIRST -> prioritized.maxByOrNull { it.cost }
             UpgradePriorityOrder.TOP_OF_LIST -> prioritized.first()

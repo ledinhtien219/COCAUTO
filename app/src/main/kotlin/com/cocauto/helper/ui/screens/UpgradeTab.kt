@@ -56,6 +56,8 @@ import com.cocauto.helper.ui.theme.TextSecondary
 private val COMMON_SKIP_BUILDING_PRESETS = listOf(
     "Town Hall",
     "Nhà Chính",
+    "Lều Thợ xây",
+    "Builder's Hut",
     "Wall",
     "Tường",
     "Barbarian King",
@@ -145,7 +147,7 @@ fun UpgradeTab(
         // 2. Builder Suggested Building Upgrades & New Construction
         SectionCard(
             title = "Nhận dạng Thợ xây — Tự nâng cấp & Xây mới",
-            subtitle = "Đọc chính xác số Thợ xây (tách riêng khỏi Lab) — chỉ mở menu nâng cấp & đặt xây mới khi có Thợ rảnh",
+            subtitle = "Khi có Thợ rảnh: tìm nhà thời gian ngắn up lên trước → đến nhà còn lại → cuối cùng mới nâng Tường (phù hợp Vàng/Dầu đang có, tuyệt đối không tiêu Gem)",
         ) {
             SettingSwitchRow(
                 title = "Chỉ nâng & xây khi nhận diện có Thợ xây rảnh (≥ 1)",
@@ -186,6 +188,7 @@ fun UpgradeTab(
             Spacer(modifier = Modifier.height(4.dp))
             SingleChoiceChipRow(
                 options = listOf(
+                    UpgradePriorityOrder.SHORTEST_TIME_FIRST to "Thời gian ngắn trước",
                     UpgradePriorityOrder.CHEAPEST_FIRST to "Rẻ nhất trước",
                     UpgradePriorityOrder.MOST_EXPENSIVE_FIRST to "Đắt nhất trước",
                     UpgradePriorityOrder.TOP_OF_LIST to "Đầu danh sách",
@@ -268,8 +271,8 @@ fun UpgradeTab(
 
         // 3. Auto Wall Upgrades
         SectionCard(
-            title = "Tự nâng Tường (Auto Wall)",
-            subtitle = "Xả bớt Vàng / Dầu khi kho sắp đầy (có thể dùng Thợ giữ riêng ở trên)",
+            title = "Tự nâng Tường — Chạy sau cùng (Auto Wall)",
+            subtitle = "Chỉ nâng Tường CUỐI CÙNG sau khi đã kiểm tra hết các nhà xây/nâng và vẫn còn Thợ rảnh + đủ Vàng/Dầu",
         ) {
             SettingSwitchRow(
                 title = "Bật tự nâng Tường khi tài nguyên vượt ngưỡng",
