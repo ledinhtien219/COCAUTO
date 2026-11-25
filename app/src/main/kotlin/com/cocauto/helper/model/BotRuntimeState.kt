@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +50,7 @@ enum class LogLevel {
     ERROR,
 }
 
+@Serializable
 data class LootReading(
     val gold: Long = 0L,
     val elixir: Long = 0L,
@@ -59,18 +61,21 @@ data class LootReading(
     val isValid: Boolean get() = gold > 0L || elixir > 0L || darkElixir > 0L
 }
 
+@Serializable
 data class HomeResources(
     val gold: Long = 0L,
     val elixir: Long = 0L,
     val darkElixir: Long = 0L,
 )
 
+@Serializable
 data class StorageFillLevels(
     val goldPercent: Int = 0,
     val elixirPercent: Int = 0,
     val darkElixirPercent: Int = 0,
 )
 
+@Serializable
 data class BuilderStatus(
     val freeBuilders: Int = 0,
     val totalBuilders: Int = 0,
@@ -102,6 +107,7 @@ data class BotLogEntry(
     }
 }
 
+@Serializable
 data class SessionStats(
     val startedAtMs: Long = 0L,
     val attacksCompleted: Int = 0,
@@ -169,14 +175,44 @@ object BotStateStore {
         _runtime.update(transform)
     }
 
+    @Volatile
+    private var statsPersistListener: ((SessionStats) -> Unit)? = null
+
+    fun setStatsPersistListener(listener: (SessionStats) -> Unit) {
+        statsPersistListener = listener
+    }
+
+    fun hydrateStats(saved: SessionStats) {
+        _runtime.update { current ->
+            // Only hydrate if runtime hasn't already accumulated fresher live stats in this process
+            val cur = current.stats
+            val hasLive = cur.attacksCompleted > 0 || cur.builderBaseAttacks > 0 ||
+                cur.buildingsBuilt > 0 || cur.buildingsUpgraded > 0 || cur.wallsUpgraded > 0 ||
+                cur.lastHomeResources.gold > 0L || cur.lastBuilderStatus.isValid
+            if (hasLive) current else current.copy(stats = saved)
+        }
+    }
+
     fun updateStats(transform: (SessionStats) -> SessionStats) {
-        _runtime.update { it.copy(stats = transform(it.stats)) }
+        var latest: SessionStats? = null
+        _runtime.update {
+            val next = transform(it.stats)
+            latest = next
+            it.copy(stats = next)
+        }
+        latest?.let { runCatching { statsPersistListener?.invoke(it) } }
+    }
+
+    fun markSessionStarted() {
+        updateStats { cur ->
+            if (cur.startedAtMs <= 0L) cur.copy(startedAtMs = System.currentTimeMillis()) else cur
+        }
     }
 
     fun resetStats() {
-        _runtime.update {
-            it.copy(stats = SessionStats(startedAtMs = System.currentTimeMillis()))
-        }
+        val fresh = SessionStats(startedAtMs = System.currentTimeMillis())
+        _runtime.update { it.copy(stats = fresh) }
+        runCatching { statsPersistListener?.invoke(fresh) }
     }
 
     fun setAction(action: String, screenState: GameScreenState? = null) {

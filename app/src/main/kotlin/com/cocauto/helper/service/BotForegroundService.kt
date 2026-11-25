@@ -82,6 +82,8 @@ class BotForegroundService : Service() {
 
         BotStateStore.updateConfig(configStorage.loadConfig())
         BotStateStore.updateCalibration(configStorage.loadCalibration())
+        BotStateStore.hydrateStats(configStorage.loadStats())
+        BotStateStore.setStatsPersistListener { stats -> configStorage.saveStats(stats) }
         createNotificationChannel()
         initAppOverlays()
     }
@@ -304,7 +306,7 @@ class BotForegroundService : Service() {
 
         acquireWakeLockIfNeeded()
         showBestFloatingHud()
-        BotStateStore.resetStats()
+        BotStateStore.markSessionStarted()
         BotStateStore.updateRuntime {
             it.copy(status = BotRunStatus.RUNNING, currentAction = "Đang kết nối ${backendMode.label}...")
         }
@@ -427,6 +429,14 @@ class BotForegroundService : Service() {
                     append("Thợ: ${builders.freeBuilders}/${builders.totalBuilders} | ")
                     append("Nhà(V/D): ${homeRes.gold}(${fill.goldPercent}%)/${homeRes.elixir}(${fill.elixirPercent}%) | ")
                     append("Loot: ${loot.gold}/${loot.elixir}/${loot.darkElixir}")
+                }
+                BotStateStore.updateStats { s ->
+                    s.copy(
+                        lastHomeResources = if (homeRes.gold > 0L || homeRes.elixir > 0L) homeRes else s.lastHomeResources,
+                        lastStorageFill = if (fill.goldPercent > 0 || fill.elixirPercent > 0) fill else s.lastStorageFill,
+                        lastBuilderStatus = if (builders.isValid) builders else s.lastBuilderStatus,
+                        lastScannedLoot = if (loot.isValid) loot else s.lastScannedLoot,
+                    )
                 }
                 BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = summary) }
                 BotStateStore.log("OCR Test: $summary", LogLevel.INFO)

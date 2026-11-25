@@ -3,6 +3,7 @@ package com.cocauto.helper.data
 import android.content.Context
 import com.cocauto.helper.model.BotConfig
 import com.cocauto.helper.model.CalibrationProfile
+import com.cocauto.helper.model.SessionStats
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -22,6 +23,7 @@ class ConfigStorage(context: Context) {
     private val appContext = context.applicationContext
     private val configFile = File(appContext.filesDir, "coc_bot_config.json")
     private val calibrationFile = File(appContext.filesDir, "coc_calibration.json")
+    private val statsFile = File(appContext.filesDir, "coc_session_stats.json")
 
     private val json = Json {
         prettyPrint = true
@@ -116,6 +118,22 @@ class ConfigStorage(context: Context) {
     fun saveCalibration(profile: CalibrationProfile) {
         runCatching {
             calibrationFile.writeText(json.encodeToString(profile))
+        }
+    }
+
+    fun loadStats(): SessionStats {
+        return runCatching {
+            if (statsFile.exists()) {
+                json.decodeFromString<SessionStats>(statsFile.readText())
+            } else {
+                SessionStats()
+            }
+        }.getOrDefault(SessionStats())
+    }
+
+    fun saveStats(stats: SessionStats) {
+        runCatching {
+            statsFile.writeText(json.encodeToString(stats))
         }
     }
 

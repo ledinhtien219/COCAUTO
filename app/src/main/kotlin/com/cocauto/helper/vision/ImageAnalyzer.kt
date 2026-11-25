@@ -69,11 +69,16 @@ object ImageAnalyzer {
     }
 
     /**
-     * Detects white matchmaking clouds covering the screen center.
+     * Detects full-screen bright white matchmaking clouds (checking both center and outer edges
+     * with strict brightness V >= 0.90 so centered cream/white dialog popups like "Welcome Back"
+     * surrounded by dimmed village grass are NEVER misclassified as clouds!).
      */
     fun isCloudSearchScreen(frame: Bitmap): Boolean {
-        val stats = sampleRegionHsv(frame, NormRect(0.20f, 0.20f, 0.80f, 0.80f), gridCols = 14, gridRows = 10)
-        return stats.whiteCloudRatio >= 0.70f
+        val fullStats = sampleRegionHsv(frame, NormRect(0.05f, 0.08f, 0.95f, 0.92f), gridCols = 14, gridRows = 10)
+        if (fullStats.whiteCloudRatio < 0.72f) return false
+        val leftEdge = sampleRegionHsv(frame, NormRect(0.03f, 0.15f, 0.15f, 0.85f), gridCols = 4, gridRows = 8)
+        val rightEdge = sampleRegionHsv(frame, NormRect(0.85f, 0.15f, 0.97f, 0.85f), gridCols = 4, gridRows = 8)
+        return leftEdge.whiteCloudRatio >= 0.65f && rightEdge.whiteCloudRatio >= 0.65f
     }
 
     /**
@@ -503,7 +508,7 @@ object ImageAnalyzer {
                 val v = hsv[2]
                 total++
                 satSum += s
-                if (v >= 0.78f && s <= 0.16f) whiteClouds++
+                if (v >= 0.89f && s <= 0.13f) whiteClouds++
                 if (v <= 0.10f) dark++
                 if (s >= 0.30f && v >= 0.28f) colorful++
             }

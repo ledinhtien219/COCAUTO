@@ -361,4 +361,22 @@ class ResourceParserTest {
         )
         assertNull(ResourceParser.parseArmyCampCapacity(homeHudOnly))
     }
+
+    @Test
+    fun parseBattleSummaryLoot_extractsActualEarnedGoldElixirAndIgnoresBonus() {
+        val summaryLines = listOf(
+            OcrTextLine("Chiến thắng", NormRect(0.38f, 0.14f, 0.62f, 0.22f)),
+            OcrTextLine("Bạn nhận được:", NormRect(0.40f, 0.32f, 0.60f, 0.36f)),
+            OcrTextLine("181 240", NormRect(0.42f, 0.40f, 0.56f, 0.45f)),
+            OcrTextLine("165 400", NormRect(0.42f, 0.48f, 0.56f, 0.53f)),
+            OcrTextLine("1 250", NormRect(0.44f, 0.56f, 0.54f, 0.60f)),
+            OcrTextLine("+28", NormRect(0.46f, 0.63f, 0.52f, 0.67f)),
+            OcrTextLine("100% Thưởng", NormRect(0.40f, 0.69f, 0.60f, 0.73f)),
+            OcrTextLine("Về làng", NormRect(0.42f, 0.84f, 0.58f, 0.90f)),
+        )
+        val earned = ResourceParser.parseBattleSummaryLoot(summaryLines)
+        assertEquals(181_240L, earned.gold)
+        assertEquals(165_400L, earned.elixir)
+        assertEquals(1_250L, earned.darkElixir)
+    }
 }

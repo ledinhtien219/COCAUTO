@@ -13,17 +13,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,7 +55,10 @@ import com.cocauto.helper.model.BotLogEntry
 import com.cocauto.helper.model.BotRuntimeSnapshot
 import com.cocauto.helper.model.CalibrationProfile
 import com.cocauto.helper.model.LogLevel
+import com.cocauto.helper.ui.components.ExpandableSectionCard
 import com.cocauto.helper.ui.components.SectionCard
+import com.cocauto.helper.ui.components.SettingDivider
+import com.cocauto.helper.ui.components.SettingGroupLabel
 import com.cocauto.helper.ui.components.SettingSwitchRow
 import com.cocauto.helper.ui.components.SingleChoiceChipRow
 import com.cocauto.helper.ui.theme.ClashCrimson
@@ -86,6 +92,9 @@ fun CalibrationAndLogsTab(
     val context = LocalContext.current
     var importBuffer by remember { mutableStateOf("") }
     val upCfg = config.update
+    val hasActionableUpdate = updateState is UpdateUiState.Available ||
+        updateState is UpdateUiState.Downloading ||
+        updateState is UpdateUiState.ReadyToInstall
 
     Column(
         modifier = Modifier
@@ -94,29 +103,104 @@ fun CalibrationAndLogsTab(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // 1. Auto-Update Card
+        // 1. Calibration & Live OCR Test
         SectionCard(
-            title = "Tự động cập nhật phiên bản mới",
-            subtitle = "Phiên bản hiện tại: $currentVersionLabel • Hỗ trợ GitHub Releases, URL update.json hoặc Wi-Fi LAN từ máy tính",
+            title = "Nhận diện màn hình & OCR",
+            subtitle = "Tự căn tọa độ nút & khung tài nguyên ngay khi vào Clash of Clans",
+            icon = Icons.Default.Tune,
+            accentColor = ClashGold,
+            badgeText = calibration.preset.label,
+            badgeColor = ClashSky,
         ) {
             SettingSwitchRow(
-                title = "Tự kiểm tra cập nhật mỗi khi mở app",
+                title = "Tự nhận diện giao diện màn hình",
+                subtitle = "Khuyên bật — tự khớp mọi tỷ lệ màn hình",
+                checked = config.safety.autoCalibrateScreen,
+                onCheckedChange = { v -> onUpdateConfig { it.copy(safety = it.safety.copy(autoCalibrateScreen = v)) } },
+            )
+
+            SettingDivider()
+            SettingGroupLabel("Tỷ lệ màn hình dự phòng:")
+            SingleChoiceChipRow(
+                options = AspectPreset.entries.map { it to it.label },
+                selected = calibration.preset,
+                onSelect = onSelectPreset,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onOpenCalibrationOverlay,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("Nhận diện", fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = onRunOcrTestNow,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("Thử OCR")
+                }
+            }
+
+            if (runtime.lastOcrTestSummary.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = runtime.lastOcrTestSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClashSky,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF0B1926))
+                        .padding(10.dp),
+                )
+            }
+        }
+
+        // 2. Auto-Update Card (Collapsible unless an update is available)
+        ExpandableSectionCard(
+            title = "Cập nhật ứng dụng",
+            subtitle = "Phiên bản hiện tại: $currentVersionLabel",
+            icon = Icons.Default.SystemUpdate,
+            accentColor = ClashSky,
+            badgeText = when (updateState) {
+                is UpdateUiState.Available -> "Có bản mới!"
+                is UpdateUiState.ReadyToInstall -> "Sẵn sàng cài"
+                else -> currentVersionLabel
+            },
+            badgeColor = if (hasActionableUpdate) ClashEmerald else ClashSky,
+            initiallyExpanded = hasActionableUpdate,
+        ) {
+            SettingSwitchRow(
+                title = "Tự kiểm tra cập nhật khi mở app",
                 checked = upCfg.autoCheckOnStartup,
                 onCheckedChange = { v -> onUpdateConfig { it.copy(update = it.update.copy(autoCheckOnStartup = v)) } },
             )
+            SettingDivider()
             SettingSwitchRow(
-                title = "Tự tải file APK ngay khi phát hiện bản mới",
+                title = "Tự tải APK khi phát hiện bản mới",
                 checked = upCfg.autoDownloadWhenAvailable,
                 onCheckedChange = { v -> onUpdateConfig { it.copy(update = it.update.copy(autoDownloadWhenAvailable = v)) } },
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = upCfg.updateSourceUrl,
                 onValueChange = { url -> onUpdateConfig { it.copy(update = it.update.copy(updateSourceUrl = url)) } },
-                label = { Text("Nguồn cập nhật (GitHub repo, update.json hoặc IP:8080)") },
+                label = { Text("Nguồn cập nhật (GitHub / URL)") },
                 placeholder = { Text("ledinhtien219/COCAUTO") },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -124,9 +208,10 @@ fun CalibrationAndLogsTab(
             Button(
                 onClick = onCheckUpdatesNow,
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
                 enabled = updateState !is UpdateUiState.Checking && updateState !is UpdateUiState.Downloading,
             ) {
-                Icon(Icons.Default.Refresh, contentDescription = null)
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     if (updateState is UpdateUiState.Checking) "Đang kiểm tra..." else "Kiểm tra cập nhật ngay",
@@ -137,13 +222,10 @@ fun CalibrationAndLogsTab(
             Spacer(modifier = Modifier.height(8.dp))
             when (updateState) {
                 is UpdateUiState.Idle -> Unit
-                is UpdateUiState.Checking -> {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-
+                is UpdateUiState.Checking -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 is UpdateUiState.UpToDate -> {
                     Text(
-                        text = "✓ Bạn đang dùng phiên bản mới nhất (v${updateState.currentVersion}).",
+                        text = "✓ Bạn đang dùng bản mới nhất (v${updateState.currentVersion}).",
                         style = MaterialTheme.typography.bodySmall,
                         color = ClashEmerald,
                     )
@@ -167,6 +249,7 @@ fun CalibrationAndLogsTab(
                     Button(
                         onClick = { onDownloadUpdate(updateState.release) },
                         modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ClashSky, contentColor = Color(0xFF031926)),
                     ) {
                         Icon(Icons.Default.Download, contentDescription = null)
@@ -195,6 +278,7 @@ fun CalibrationAndLogsTab(
                     Button(
                         onClick = { onInstallUpdate(updateState.apkFile) },
                         modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ClashEmerald, contentColor = Color(0xFF071B0D)),
                     ) {
                         Icon(Icons.Default.SystemUpdate, contentDescription = null)
@@ -213,66 +297,13 @@ fun CalibrationAndLogsTab(
             }
         }
 
-        // 2. Calibration Profile & Auto-Detect Overlay
-        SectionCard(
-            title = "Tự động nhận diện màn hình & khung OCR",
-            subtitle = "Mặc định bot tự quét và căn tọa độ nút / tài nguyên ngay khi vào game Clash of Clans — không cần kéo thủ công.",
-        ) {
-            SettingSwitchRow(
-                title = "Tự động nhận diện giao diện màn hình (Khuyên bật)",
-                subtitle = "Tự tìm nút Đánh, Thợ xây, Lab, Vàng/Dầu và màn hình Soi nhà trên mọi tỷ lệ máy",
-                checked = config.safety.autoCalibrateScreen,
-                onCheckedChange = { v -> onUpdateConfig { it.copy(safety = it.safety.copy(autoCalibrateScreen = v)) } },
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("Tỷ lệ màn hình dự phòng:", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-            Spacer(modifier = Modifier.height(4.dp))
-            SingleChoiceChipRow(
-                options = AspectPreset.entries.map { it to it.label },
-                selected = calibration.preset,
-                onSelect = onSelectPreset,
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = onOpenCalibrationOverlay,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.Tune, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Tự nhận diện ngay trên Clash of Clans", fontWeight = FontWeight.Bold)
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-            OutlinedButton(
-                onClick = onRunOcrTestNow,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Chạy thử OCR trên màn hình hiện tại")
-            }
-
-            if (runtime.lastOcrTestSummary.isNotBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = runtime.lastOcrTestSummary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClashSky,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF0B1926))
-                        .padding(10.dp),
-                )
-            }
-        }
-
-        // 3. Backup / Share Config JSON
-        SectionCard(
-            title = "Sao lưu & Khôi phục cấu hình (JSON)",
-            subtitle = "Lưu bộ cấu hình + tọa độ đã chỉnh cho dòng máy của bạn hoặc chia sẻ sang máy khác",
+        // 3. Backup / Share Config JSON (Collapsible!)
+        ExpandableSectionCard(
+            title = "Sao lưu & Khôi phục (JSON)",
+            subtitle = "Xuất hoặc nhập toàn bộ cài đặt & tọa độ sang máy khác",
+            icon = Icons.Default.Backup,
+            accentColor = ClashGold,
+            initiallyExpanded = false,
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -285,10 +316,11 @@ fun CalibrationAndLogsTab(
                         Toast.makeText(context, "Đã sao chép JSON cấu hình!", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Sao chép JSON")
+                    Text("Sao chép")
                 }
 
                 Button(
@@ -304,26 +336,32 @@ fun CalibrationAndLogsTab(
                         }
                     },
                     modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Icon(Icons.Default.Download, contentDescription = null)
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Nhập JSON")
+                    Text("Khôi phục")
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = importBuffer,
                 onValueChange = { importBuffer = it },
-                label = { Text("Dán chuỗi JSON cấu hình vào đây để khôi phục") },
+                label = { Text("Dán chuỗi JSON cấu hình vào đây") },
                 maxLines = 4,
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
 
-        // 4. Live Logs
+        // 4. Live Logs Console
         SectionCard(
-            title = "Nhật ký hoạt động (${logs.size})",
-            subtitle = "Theo dõi từng bước đọc OCR, lọc nhà, thả quân và nâng cấp theo thời gian thực",
+            title = "Nhật ký hoạt động",
+            subtitle = "Theo dõi OCR, thả quân và nâng cấp theo thời gian thực",
+            icon = Icons.Default.Terminal,
+            accentColor = ClashEmerald,
+            badgeText = "${logs.size} dòng",
+            badgeColor = ClashSky,
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -336,16 +374,18 @@ fun CalibrationAndLogsTab(
                         Toast.makeText(context, "Đã sao chép nhật ký!", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Sao chép log")
+                    Text("Sao chép")
                 }
                 OutlinedButton(
                     onClick = onClearLogs,
                     modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Xóa log")
                 }
@@ -362,7 +402,7 @@ fun CalibrationAndLogsTab(
             ) {
                 if (logs.isEmpty()) {
                     Text(
-                        text = "Chưa có nhật ký. Bấm 'Bắt đầu Auto' hoặc 'Thử OCR' để xem log hoạt động.",
+                        text = "Chưa có nhật ký. Bấm 'Bắt đầu Auto' hoặc 'Thử OCR' để xem log.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )

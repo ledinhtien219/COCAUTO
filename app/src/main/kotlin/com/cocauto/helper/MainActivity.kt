@@ -19,16 +19,25 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -41,8 +50,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cocauto.helper.bridge.ShizukuAdbBridge
@@ -53,14 +66,18 @@ import com.cocauto.helper.model.LogLevel
 import com.cocauto.helper.service.BotForegroundService
 import com.cocauto.helper.service.CocAccessibilityService
 import com.cocauto.helper.ui.MainViewModel
+import com.cocauto.helper.ui.components.StatusPill
 import com.cocauto.helper.ui.screens.CalibrationAndLogsTab
 import com.cocauto.helper.ui.screens.DashboardTab
 import com.cocauto.helper.ui.screens.FarmTab
 import com.cocauto.helper.ui.screens.PermissionSummary
 import com.cocauto.helper.ui.screens.UpgradeTab
+import com.cocauto.helper.ui.theme.ClashCrimson
+import com.cocauto.helper.ui.theme.ClashEmerald
 import com.cocauto.helper.ui.theme.ClashGold
 import com.cocauto.helper.ui.theme.CoCAutoTheme
 import com.cocauto.helper.ui.theme.SlateSurface
+import com.cocauto.helper.ui.theme.TextSecondary
 import com.cocauto.helper.updater.UpdateReleaseInfo
 import com.cocauto.helper.vision.ScreenStateDetector
 import rikka.shizuku.Shizuku
@@ -241,10 +258,38 @@ class MainActivity : ComponentActivity() {
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = "CoC Auto (ADB Bridge)",
-                            fontWeight = FontWeight.Bold,
-                            color = ClashGold,
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_app_logo),
+                                contentDescription = "CoC Auto",
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, ClashGold.copy(alpha = 0.65f), RoundedCornerShape(10.dp)),
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "CoC Auto",
+                                    fontWeight = FontWeight.Bold,
+                                    color = ClashGold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    text = "v${BuildConfig.VERSION_NAME} • ADB Bridge",
+                                    color = TextSecondary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    },
+                    actions = {
+                        val netLabel = runtime.networkTypeLabel.ifBlank { "ADB" }
+                        StatusPill(
+                            text = if (bridgeReady) "ADB • $netLabel" else "Chưa nối ADB",
+                            color = if (bridgeReady) ClashEmerald else ClashCrimson,
+                            showDot = true,
+                            modifier = Modifier.padding(end = 12.dp),
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = SlateSurface),
@@ -262,7 +307,7 @@ class MainActivity : ComponentActivity() {
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
                         icon = { Icon(Icons.Default.SportsEsports, contentDescription = null) },
-                        label = { Text("Auto Farm") },
+                        label = { Text("Farm") },
                     )
                     NavigationBarItem(
                         selected = selectedTab == 2,
@@ -273,8 +318,8 @@ class MainActivity : ComponentActivity() {
                     NavigationBarItem(
                         selected = selectedTab == 3,
                         onClick = { selectedTab = 3 },
-                        icon = { Icon(Icons.Default.Tune, contentDescription = null) },
-                        label = { Text("Hiệu chỉnh") },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        label = { Text("Hệ thống") },
                     )
                 }
             },
@@ -324,6 +369,7 @@ class MainActivity : ComponentActivity() {
                         onRequestBatteryExemption = { requestIgnoreBatteryOptimizations() },
                         onDownloadUpdate = { release -> handleDownloadAndInstall(release) },
                         onInstallUpdate = { file -> handleInstallApk(file) },
+                        onResetStats = { viewModel.resetSessionStats() },
                     )
 
                     1 -> FarmTab(

@@ -52,6 +52,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val loadedConfig = storage.loadConfig()
         BotStateStore.updateConfig(loadedConfig)
         BotStateStore.updateCalibration(storage.loadCalibration(dm.widthPixels, dm.heightPixels))
+        BotStateStore.hydrateStats(storage.loadStats())
+        BotStateStore.setStatsPersistListener { stats -> storage.saveStats(stats) }
         lastObservedNetworkLabel = bridgeManager.detectNetworkLabel()
         BotStateStore.updateRuntime { it.copy(networkTypeLabel = lastObservedNetworkLabel) }
 
@@ -198,6 +200,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearLogs() {
         BotStateStore.clearLogs()
+    }
+
+    fun resetSessionStats() {
+        BotStateStore.resetStats()
+        BotStateStore.log("Đã đặt lại thống kê phiên về 0.", LogLevel.INFO)
     }
 
     fun autoConnectBridge(

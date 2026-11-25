@@ -10,6 +10,8 @@ import com.cocauto.helper.vision.AutoCalibrationEngine
 import com.cocauto.helper.vision.AutoTroopBarDetector
 import com.cocauto.helper.vision.ImageAnalyzer
 import com.cocauto.helper.vision.ResourceParser
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Automates Home Village farming:
@@ -219,11 +221,34 @@ class HomeFarmEngine {
             val latestCal = ctx.calibration
 
             // FAST MODE ("Đủ quân là chiến ngay"): skip all loot/storage/Next conditions and attack Base #1 immediately!
+            // Still read enemy Gold/Elixir/DE in parallel on the SAME frame so Session Stats are always accurate!
             if (cfg.attackWhenArmyReady) {
-                val quickLoot = scoutAnalysis.preParsedLoot ?: LootReading()
-                val liveCards = ctx.withFrame { frame ->
-                    AutoTroopBarDetector.detectAvailableCards(frame, latestCal, ctx.ocrEngine)
-                }.orEmpty()
+                val fastPair = ctx.withFrame { frame ->
+                    coroutineScope {
+                        val cardsDef = async { AutoTroopBarDetector.detectAvailableCards(frame, latestCal, ctx.ocrEngine) }
+                        val lootDef = async {
+                            val pre = scoutAnalysis.preParsedLoot?.takeIf { it.isValid }
+                            if (pre != null) {
+                                pre
+                            } else {
+                                val primary = ctx.screenDetector.readEnemyLoot(frame, latestCal)
+                                if (primary.isValid) {
+                                    primary
+                                } else {
+                                    val fallbackOcr = ctx.ocrEngine.recognizeRoi(
+                                        frame = frame,
+                                        roi = com.cocauto.helper.model.NormRect(0.01f, 0.085f, 0.30f, 0.36f),
+                                        enhance = true,
+                                    )
+                                    ResourceParser.parseEnemyLootLines(fallbackOcr.lines)
+                                }
+                            }
+                        }
+                        cardsDef.await() to lootDef.await()
+                    }
+                }
+                val liveCards = fastPair?.first.orEmpty()
+                val quickLoot = fastPair?.second ?: scoutAnalysis.preParsedLoot ?: LootReading()
                 if (liveCards.isEmpty()) {
                     BotStateStore.log("Không thấy quân trên thanh thả lính — quay về làng chờ có quân.", LogLevel.WARN)
                     ctx.tap(latestCal.endBattleButton, delayAfter = false)
@@ -329,10 +354,15 @@ class HomeFarmEngine {
 
             when (analysis?.state) {
                 GameScreenState.BATTLE_SUMMARY -> {
+                    val summaryLoot = ResourceParser.parseBattleSummaryLoot(analysis.fullLines)
+                    val earnedLoot = if (summaryLoot.isValid) summaryLoot else targetLoot
                     BotStateStore.setAction("Đánh xong — quay về làng ngay!", GameScreenState.BATTLE_SUMMARY)
-                    BotStateStore.log("Trận đánh kết thúc — bấm Về làng ngay để chạy chu kỳ tiếp theo!", LogLevel.SUCCESS)
+                    BotStateStore.log(
+                        "Trận đánh kết thúc (+${formatK(earnedLoot.gold)} Vàng, +${formatK(earnedLoot.elixir)} Dầu) — bấm Về làng ngay!",
+                        LogLevel.SUCCESS,
+                    )
+                    recordAttackSuccess(earnedLoot)
                     returnHomeAndConfirmVillage(ctx, analysis.suggestedTapPoint ?: cal.returnHomeButton)
-                    recordAttackSuccess(targetLoot)
                     return
                 }
 

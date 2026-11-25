@@ -116,6 +116,15 @@ class BotOrchestrator(
                     }
 
                     GameScreenState.BATTLE_SUMMARY -> {
+                        val earned = ResourceParser.parseBattleSummaryLoot(analysis.fullLines)
+                        BotStateStore.updateStats { s ->
+                            s.copy(
+                                attacksCompleted = s.attacksCompleted + 1,
+                                estimatedGoldLooted = s.estimatedGoldLooted + earned.gold,
+                                estimatedElixirLooted = s.estimatedElixirLooted + earned.elixir,
+                                estimatedDarkElixirLooted = s.estimatedDarkElixirLooted + earned.darkElixir,
+                            )
+                        }
                         BotStateStore.setAction("Bấm Về làng sau trận", GameScreenState.BATTLE_SUMMARY)
                         ctx.tap(analysis.suggestedTapPoint ?: ctx.calibration.returnHomeButton, delayAfter = false)
                         ctx.sleep(900L)
@@ -209,14 +218,16 @@ class BotOrchestrator(
         val snapshot = upgradeEngine.readFullHomeSnapshot(ctx)
         val afterUpgrade = upgradeEngine.runUpgradeCycle(ctx, preSnapshot = snapshot) ?: snapshot
 
-        // 3. Check if Home Village storages are full (ZERO extra capture!)
+        // 3. Always update live Home Village stats (resources, storage %, builders) + check full-storage gate
         if (afterUpgrade != null) {
             val homeRes = afterUpgrade.resources
             val fill = afterUpgrade.storageFill
+            val builders = afterUpgrade.builders
             BotStateStore.updateStats {
                 it.copy(
-                    lastHomeResources = homeRes,
-                    lastStorageFill = fill,
+                    lastHomeResources = if (homeRes.gold > 0L || homeRes.elixir > 0L) homeRes else it.lastHomeResources,
+                    lastStorageFill = if (fill.goldPercent > 0 || fill.elixirPercent > 0) fill else it.lastStorageFill,
+                    lastBuilderStatus = if (builders.isValid) builders else it.lastBuilderStatus,
                 )
             }
             val homeCfg = ctx.config.homeFarm
@@ -247,10 +258,27 @@ class BotOrchestrator(
         // 4. Find target base & attack rapidly
         homeFarmEngine.runAttackCycle(ctx)
 
-        // 5. Re-check upgrades right after loot comes in ONLY if builders might be free (avoids wasting ~2s when 0/N busy!)
-        val lastBuilders = afterUpgrade?.builders
-        if (lastBuilders == null || !lastBuilders.isValid || lastBuilders.freeBuilders > 0) {
-            upgradeEngine.runUpgradeCycle(ctx)
+        // 5. Refresh post-battle resources & builders immediately so dashboard stats are always live!
+        val postBattleSnap = upgradeEngine.readFullHomeSnapshot(ctx)
+        if (postBattleSnap != null) {
+            BotStateStore.updateStats {
+                it.copy(
+                    lastHomeResources = if (postBattleSnap.resources.gold > 0L || postBattleSnap.resources.elixir > 0L) {
+                        postBattleSnap.resources
+                    } else {
+                        it.lastHomeResources
+                    },
+                    lastStorageFill = if (postBattleSnap.storageFill.goldPercent > 0 || postBattleSnap.storageFill.elixirPercent > 0) {
+                        postBattleSnap.storageFill
+                    } else {
+                        it.lastStorageFill
+                    },
+                    lastBuilderStatus = if (postBattleSnap.builders.isValid) postBattleSnap.builders else it.lastBuilderStatus,
+                )
+            }
+            if (!postBattleSnap.builders.isValid || postBattleSnap.builders.freeBuilders > 0) {
+                upgradeEngine.runUpgradeCycle(ctx, preSnapshot = postBattleSnap)
+            }
         }
     }
 }

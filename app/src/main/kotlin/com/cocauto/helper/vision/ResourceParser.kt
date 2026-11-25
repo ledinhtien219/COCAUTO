@@ -140,6 +140,55 @@ object ResourceParser {
     }
 
     /**
+     * Parses actual loot earned from the post-battle Victory / Defeat summary screen
+     * ("Bạn nhận được:" / "You got:" centered resource rows, ignoring % bonus, trophies & troop counts).
+     */
+    fun parseBattleSummaryLoot(lines: List<OcrTextLine>): LootReading {
+        val centerRows = lines
+            .filter { line ->
+                line.bounds.centerX in 0.30f..0.72f && line.bounds.centerY in 0.30f..0.74f
+            }
+            .sortedBy { it.bounds.centerY }
+
+        val values = mutableListOf<Long>()
+        for (line in centerRows) {
+            val trimmed = line.text.trim()
+            val norm = normalizeForMatch(trimmed)
+            if (trimmed.contains("%") ||
+                trimmed.startsWith("+") ||
+                trimmed.startsWith("-") ||
+                norm.contains("thuong") ||
+                norm.contains("bonus") ||
+                norm.contains("sao") ||
+                norm.contains("star") ||
+                norm.contains("cup") ||
+                norm.contains("troph") ||
+                norm.contains("binh linh") ||
+                norm.contains("troops") ||
+                norm.contains("nhan duoc") ||
+                norm.contains("you got") ||
+                trimmed.count { it.isLetter() } >= 3
+            ) {
+                continue
+            }
+            val num = parseResourceNumber(trimmed) ?: continue
+            if (num in 50L..5_000_000L) {
+                values.add(num)
+            }
+        }
+
+        val gold = values.getOrNull(0) ?: 0L
+        val elixir = values.getOrNull(1) ?: 0L
+        val darkElixir = values.getOrNull(2)?.takeIf { it <= 50_000L } ?: 0L
+        return LootReading(
+            gold = gold,
+            elixir = elixir,
+            darkElixir = darkElixir,
+            rawText = centerRows.joinToString(" | ") { it.text.trim() },
+        )
+    }
+
+    /**
      * Parses free/total builder badge text like "2/5" or "0 / 6".
      */
     fun parseBuilderStatus(raw: String): BuilderStatus? {
@@ -472,9 +521,9 @@ object ResourceParser {
                     nextRow.isSubLabelOnly
 
                 if (canMergeWithNext) {
-                    val mergedNext = nextRow!!
-                    val nextCostItem = mergedNext.costItem!!
-                    val nextCostValue = mergedNext.costValue!!
+                    val mergedNext = nextRow
+                    val nextCostItem = mergedNext.costItem
+                    val nextCostValue = mergedNext.costValue
                     val normName = normalizeForMatch(row.cleanName)
                     val isWall = normName.contains("wall") || normName.contains("tuong")
                     val isNew = (insideNewBuildingSection || row.isNewTag || mergedNext.isNewTag) && !isWall
