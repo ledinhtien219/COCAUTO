@@ -11,9 +11,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Android 11+ package visibility to launch and detect Clash of Clans -->
+    <!-- Android 11+ package visibility to launch/detect Clash of Clans and Shizuku -->
     <queries>
         <package android:name="com.supercell.clashofclans" />
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <application

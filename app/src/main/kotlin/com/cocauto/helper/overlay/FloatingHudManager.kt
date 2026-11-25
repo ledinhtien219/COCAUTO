@@ -39,6 +39,7 @@ import kotlin.math.hypot
 class FloatingHudManager(
     private val context: Context,
     private val windowManager: WindowManager,
+    private val overlayWindowType: Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
     private val onToggleRunPause: () -> Unit,
     private val onStopBot: () -> Unit,
     private val onToggleCalibration: () -> Unit,
@@ -107,7 +108,7 @@ class FloatingHudManager(
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            overlayWindowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,

@@ -45,7 +45,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cocauto.helper.bridge.ShizukuAdbBridge
+import com.cocauto.helper.model.BotRunStatus
 import com.cocauto.helper.model.BotStateStore
+import com.cocauto.helper.model.ControlBackendMode
 import com.cocauto.helper.model.LogLevel
 import com.cocauto.helper.service.BotForegroundService
 import com.cocauto.helper.service.CocAccessibilityService
@@ -60,6 +63,7 @@ import com.cocauto.helper.ui.theme.CoCAutoTheme
 import com.cocauto.helper.ui.theme.SlateSurface
 import com.cocauto.helper.updater.UpdateReleaseInfo
 import com.cocauto.helper.vision.ScreenStateDetector
+import rikka.shizuku.Shizuku
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -69,6 +73,21 @@ class MainActivity : ComponentActivity() {
     private var pendingAutoStartAfterProjection = false
     private var notificationsGranted by mutableStateOf(true)
     private var batteryUnrestricted by mutableStateOf(false)
+    private var overlayGranted by mutableStateOf(false)
+    private var shizukuRunning by mutableStateOf(false)
+    private var shizukuGranted by mutableStateOf(false)
+
+    private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+        if (requestCode == ShizukuAdbBridge.SHIZUKU_PERM_REQ_CODE) {
+            refreshSystemPermissionFlags()
+            if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Đã cấp quyền Shizuku ADB!", Toast.LENGTH_SHORT).show()
+                viewModel.testActiveBridge()
+            } else {
+                Toast.makeText(this, "Bạn đã từ chối quyền Shizuku.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -89,7 +108,7 @@ class MainActivity : ComponentActivity() {
         } else {
             pendingAutoStartAfterProjection = false
             BotStateStore.log("Người dùng đã từ chối quyền chụp màn hình.", LogLevel.WARN)
-            Toast.makeText(this, "Cần cấp quyền chụp màn hình để chạy OCR!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Cần cấp quyền chụp màn hình ở chế độ Trợ năng cũ!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -102,6 +121,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
         refreshSystemPermissionFlags()
 
         setContent {
@@ -112,10 +132,23 @@ class MainActivity : ComponentActivity() {
         handleIncomingIntent(intent)
     }
 
+    override fun onDestroy() {
+        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        super.onDestroy()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshSystemPermissionFlags()
+        if (BotStateStore.config.value.bridge.mode == ControlBackendMode.SHIZUKU_ADB && shizukuGranted) {
+            viewModel.testActiveBridge()
+        }
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
@@ -125,11 +158,6 @@ class MainActivity : ComponentActivity() {
                 requestMediaProjection(autoStart = true)
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        refreshSystemPermissionFlags()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -146,12 +174,21 @@ class MainActivity : ComponentActivity() {
         val accessibilityReady = runtime.accessibilityConnected || isAccessibilityServiceEnabled()
         val captureReady = runtime.mediaProjectionReady ||
             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && runtime.accessibilityConnected)
+        val bridgeReady = when (config.bridge.mode) {
+            ControlBackendMode.SHIZUKU_ADB -> runtime.bridgeConnected || (shizukuRunning && shizukuGranted)
+            ControlBackendMode.LOCAL_ADB_TCP, ControlBackendMode.PC_HTTP_ADB -> runtime.bridgeConnected
+            ControlBackendMode.ACCESSIBILITY_LEGACY -> accessibilityReady && captureReady
+        }
 
         val permSummary = PermissionSummary(
+            bridgeReady = bridgeReady,
+            overlayGranted = overlayGranted,
             accessibilityEnabled = accessibilityReady,
             mediaProjectionReady = captureReady,
             notificationsGranted = notificationsGranted,
             batteryUnrestricted = batteryUnrestricted,
+            shizukuRunning = shizukuRunning,
+            shizukuGranted = shizukuGranted,
         )
 
         Scaffold(
@@ -159,7 +196,7 @@ class MainActivity : ComponentActivity() {
                 TopAppBar(
                     title = {
                         Text(
-                            text = "CoC Auto Helper",
+                            text = "CoC Auto (ADB Bridge)",
                             fontWeight = FontWeight.Bold,
                             color = ClashGold,
                         )
@@ -207,6 +244,7 @@ class MainActivity : ComponentActivity() {
                         config = config,
                         permissions = permSummary,
                         updateState = updateState,
+                        onUpdateConfig = { viewModel.updateConfig(it) },
                         onRunModeChange = { mode ->
                             viewModel.updateConfig { it.copy(runMode = mode) }
                         },
@@ -214,6 +252,20 @@ class MainActivity : ComponentActivity() {
                         onStop = { BotForegroundService.stopBot(this@MainActivity) },
                         onToggleFloatingIcon = { toggleFloatingIconOverlay() },
                         onOpenCalibrationInGame = { openCalibrationOverGame() },
+                        onTestBridge = {
+                            viewModel.testActiveBridge { res ->
+                                runOnUiThread {
+                                    val msg = res.fold(
+                                        onSuccess = { it },
+                                        onFailure = { it.message ?: "Chưa kết nối được ADB cầu nối" },
+                                    )
+                                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        onRequestShizuku = { viewModel.requestShizukuPermission() },
+                        onOpenShizukuApp = { openShizukuAppOrStore() },
+                        onRequestOverlayPermission = { openOverlayPermissionSettings() },
                         onRequestAccessibility = { openAccessibilitySettings() },
                         onRequestMediaProjection = { requestMediaProjection(autoStart = false) },
                         onRequestNotifications = { requestNotificationPermission() },
@@ -263,12 +315,43 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleStartOrToggle(perms: PermissionSummary) {
+        val mode = BotStateStore.config.value.bridge.mode
+        val runtime = BotStateStore.runtime.value
+
+        if (runtime.status == BotRunStatus.RUNNING ||
+            runtime.status == BotRunStatus.WAITING_GAME ||
+            runtime.status == BotRunStatus.PAUSED
+        ) {
+            BotForegroundService.toggleRunOrPause(this)
+            return
+        }
+
+        if (mode != ControlBackendMode.ACCESSIBILITY_LEGACY) {
+            if (mode == ControlBackendMode.SHIZUKU_ADB) {
+                if (!perms.shizukuRunning) {
+                    Toast.makeText(this, "Hãy mở app Shizuku và khởi động qua Gỡ lỗi không dây trước!", Toast.LENGTH_LONG).show()
+                    openShizukuAppOrStore()
+                    return
+                }
+                if (!perms.shizukuGranted) {
+                    viewModel.requestShizukuPermission()
+                    return
+                }
+            }
+            if (!perms.overlayGranted) {
+                Toast.makeText(this, "Khuyên bật 'Hiển thị trên ứng dụng khác' để hiện icon nổi!", Toast.LENGTH_SHORT).show()
+            }
+            BotForegroundService.startAdbBridge(this, autoStartBot = true, showHud = perms.overlayGranted)
+            launchClashOfClansIfInstalled()
+            return
+        }
+
+        // Legacy Accessibility mode
         if (!perms.accessibilityEnabled) {
             Toast.makeText(this, "Hãy bật Dịch vụ Trợ năng (CoC Auto) trước!", Toast.LENGTH_LONG).show()
             openAccessibilitySettings()
             return
         }
-        val runtime = BotStateStore.runtime.value
         val canUseAccessibilityScreenshot = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && runtime.accessibilityConnected
         if (!runtime.mediaProjectionReady && !canUseAccessibilityScreenshot) {
             requestMediaProjection(autoStart = true)
@@ -280,9 +363,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         BotForegroundService.toggleRunOrPause(this)
-        if (BotStateStore.runtime.value.status != com.cocauto.helper.model.BotRunStatus.PAUSED) {
-            launchClashOfClansIfInstalled()
-        }
+        launchClashOfClansIfInstalled()
     }
 
     private fun handleDownloadAndInstall(release: UpdateReleaseInfo) {
@@ -307,25 +388,58 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleFloatingIconOverlay() {
-        val acc = CocAccessibilityService.instance
-        if (acc == null) {
-            Toast.makeText(this, "Hãy bật Dịch vụ Trợ năng trước để hiện icon nổi!", Toast.LENGTH_LONG).show()
-            openAccessibilitySettings()
+        if (Settings.canDrawOverlays(this)) {
+            BotForegroundService.toggleFloatingHud(this)
             return
         }
-        acc.toggleFloatingHud()
+        val acc = CocAccessibilityService.instance
+        if (acc != null) {
+            acc.toggleFloatingHud()
+            return
+        }
+        Toast.makeText(this, "Hãy cấp quyền 'Hiển thị trên ứng dụng khác' để hiện icon nổi!", Toast.LENGTH_LONG).show()
+        openOverlayPermissionSettings()
     }
 
     private fun openCalibrationOverGame() {
-        val acc = CocAccessibilityService.instance
-        if (acc == null) {
-            Toast.makeText(this, "Hãy bật Dịch vụ Trợ năng trước khi nhận diện màn hình!", Toast.LENGTH_LONG).show()
-            openAccessibilitySettings()
+        if (Settings.canDrawOverlays(this)) {
+            launchClashOfClansIfInstalled()
+            BotForegroundService.startAdbBridge(
+                context = this,
+                autoStartBot = false,
+                showHud = true,
+                openCalibration = true,
+            )
             return
         }
-        launchClashOfClansIfInstalled()
-        acc.showFloatingHud(startExpanded = false)
-        acc.showCalibrationOverlay(autoDetectImmediately = true)
+        val acc = CocAccessibilityService.instance
+        if (acc != null) {
+            launchClashOfClansIfInstalled()
+            acc.showFloatingHud(startExpanded = false)
+            acc.showCalibrationOverlay(autoDetectImmediately = true)
+            return
+        }
+        Toast.makeText(this, "Hãy cấp quyền 'Hiển thị trên ứng dụng khác' trước!", Toast.LENGTH_LONG).show()
+        openOverlayPermissionSettings()
+    }
+
+    private fun openShizukuAppOrStore() {
+        val launch = packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+        if (launch != null) {
+            runCatching { startActivity(launch) }
+        } else {
+            Toast.makeText(this, "Chưa cài app Shizuku — mở trang tải Shizuku...", Toast.LENGTH_LONG).show()
+            val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/"))
+            runCatching { startActivity(web) }
+        }
+    }
+
+    private fun openOverlayPermissionSettings() {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        runCatching { startActivity(intent) }
     }
 
     private fun requestMediaProjection(autoStart: Boolean) {
@@ -374,6 +488,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshSystemPermissionFlags() {
+        overlayGranted = Settings.canDrawOverlays(this)
+        shizukuRunning = viewModel.isShizukuRunning()
+        shizukuGranted = viewModel.hasShizukuPermission()
         notificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED
@@ -395,5 +512,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_REQUEST_PROJECTION_AND_START = "extra_request_projection_and_start"
+        private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     }
 }

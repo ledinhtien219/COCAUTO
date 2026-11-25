@@ -39,6 +39,7 @@ import kotlin.math.hypot
 class CalibrationOverlayManager(
     private val context: Context,
     private val windowManager: WindowManager,
+    private val overlayWindowType: Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
     private val onSaveCalibration: (CalibrationProfile) -> Unit,
     private val onRunAutoCalibrate: (CalibrationProfile, onResult: (AutoCalibrationResult?) -> Unit) -> Unit,
     private val onRunLiveOcrTest: (CalibrationProfile, onResult: (String) -> Unit) -> Unit,
@@ -144,7 +145,7 @@ class CalibrationOverlayManager(
         val windowParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            overlayWindowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,

@@ -121,6 +121,8 @@ data class BotRuntimeSnapshot(
     val screenState: GameScreenState = GameScreenState.UNKNOWN,
     val currentAction: String = "Sẵn sàng",
     val foregroundPackage: String = "",
+    val bridgeConnected: Boolean = false,
+    val bridgeStatusText: String = "Chưa kết nối ADB cầu nối",
     val accessibilityConnected: Boolean = false,
     val mediaProjectionReady: Boolean = false,
     val calibrationOverlayVisible: Boolean = false,

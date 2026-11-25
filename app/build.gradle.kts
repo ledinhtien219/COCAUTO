@@ -13,8 +13,8 @@ android {
     applicationId = "com.cocauto.helper"
     minSdk = 26
     targetSdk = 35
-    versionCode = 10
-    versionName = "1.6.0"
+    versionCode = 11
+    versionName = "2.0.0"
   }
 
   signingConfigs {
@@ -38,7 +38,7 @@ android {
   }
   buildFeatures {
     compose = true
-    aidl = false
+    aidl = true
     buildConfig = true
     shaders = false
   }
@@ -77,6 +77,10 @@ dependencies {
 
   // On-device Offline OCR (Google ML Kit Text Recognition)
   implementation(libs.mlkit.text.recognition)
+
+  // Shizuku on-device ADB Shell bridge (no AccessibilityService required)
+  implementation(libs.shizuku.api)
+  implementation(libs.shizuku.provider)
 
   // Compose
   implementation(libs.androidx.compose.ui)

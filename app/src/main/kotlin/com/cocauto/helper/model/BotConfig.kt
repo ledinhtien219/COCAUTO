@@ -150,6 +150,22 @@ data class SessionSafetyConfig(
 )
 
 @Serializable
+enum class ControlBackendMode(val label: String) {
+    SHIZUKU_ADB("Shizuku (ADB trên máy)"),
+    LOCAL_ADB_TCP("ADB TCP (127.0.0.1:5555)"),
+    PC_HTTP_ADB("ADB Cầu nối PC"),
+    ACCESSIBILITY_LEGACY("Trợ năng (Cũ)"),
+}
+
+@Serializable
+data class BridgeConfig(
+    val mode: ControlBackendMode = ControlBackendMode.SHIZUKU_ADB,
+    val adbTcpHost: String = "127.0.0.1",
+    val adbTcpPort: Int = 5555,
+    val pcBridgeUrl: String = "http://127.0.0.1:8085",
+)
+
+@Serializable
 data class UpdateConfig(
     val autoCheckOnStartup: Boolean = true,
     val autoDownloadWhenAvailable: Boolean = false,
@@ -163,6 +179,7 @@ data class UpdateConfig(
 @Serializable
 data class BotConfig(
     val runMode: BotRunMode = BotRunMode.HOME_ONLY,
+    val bridge: BridgeConfig = BridgeConfig(),
     val homeFarm: HomeFarmConfig = HomeFarmConfig(),
     val builderBase: BuilderBaseConfig = BuilderBaseConfig(),
     val upgrade: AutoUpgradeConfig = AutoUpgradeConfig(),

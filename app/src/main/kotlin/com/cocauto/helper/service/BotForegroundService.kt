@@ -11,19 +11,27 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.cocauto.helper.MainActivity
 import com.cocauto.helper.R
+import com.cocauto.helper.bridge.DeviceBridgeManager
 import com.cocauto.helper.data.ConfigStorage
 import com.cocauto.helper.engine.BotExecutionContext
 import com.cocauto.helper.engine.BotOrchestrator
 import com.cocauto.helper.model.BotRunStatus
 import com.cocauto.helper.model.BotStateStore
 import com.cocauto.helper.model.CalibrationProfile
+import com.cocauto.helper.model.ControlBackendMode
 import com.cocauto.helper.model.LogLevel
+import com.cocauto.helper.overlay.CalibrationOverlayManager
+import com.cocauto.helper.overlay.FloatingHudManager
 import com.cocauto.helper.vision.AutoCalibrationEngine
 import com.cocauto.helper.vision.AutoCalibrationResult
 import com.cocauto.helper.vision.OcrEngine
@@ -38,27 +46,36 @@ import kotlinx.coroutines.launch
 
 /**
  * Foreground Service owning:
- * - Android 14+ compliant MediaProjection capture AND Android 11+ AccessibilityService screenshot mode
- * - On-device ML Kit OCR engine
- * - BotOrchestrator coroutine loop & WakeLock
- * - Live OCR diagnostic tests triggered from the Calibration Overlay or App UI
+ * - ADB Bridge execution (Shizuku / Local ADB TCP / PC HTTP ADB) — ZERO AccessibilityService required!
+ * - Standalone TYPE_APPLICATION_OVERLAY Floating Bubble Icon & Calibration Overlay
+ * - Optional legacy MediaProjection & Accessibility fallback
+ * - On-device ML Kit OCR engine & BotOrchestrator coroutine loop
  */
 class BotForegroundService : Service() {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private lateinit var windowManager: WindowManager
+    private lateinit var bridgeManager: DeviceBridgeManager
     private lateinit var captureManager: ScreenCaptureManager
     private lateinit var ocrEngine: OcrEngine
     private lateinit var screenDetector: ScreenStateDetector
     private lateinit var configStorage: ConfigStorage
-    private val orchestrator = BotOrchestrator()
 
+    private var appOverlayHud: FloatingHudManager? = null
+    private var appOverlayCalibration: CalibrationOverlayManager? = null
+
+    private val orchestrator = BotOrchestrator()
     private var botJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         configStorage = ConfigStorage(applicationContext)
+        bridgeManager = DeviceBridgeManager(applicationContext)
         captureManager = ScreenCaptureManager(applicationContext)
         ocrEngine = OcrEngine()
         screenDetector = ScreenStateDetector(ocrEngine)
@@ -66,10 +83,59 @@ class BotForegroundService : Service() {
         BotStateStore.updateConfig(configStorage.loadConfig())
         BotStateStore.updateCalibration(configStorage.loadCalibration())
         createNotificationChannel()
+        initAppOverlays()
+    }
+
+    private fun initAppOverlays() {
+        appOverlayHud = FloatingHudManager(
+            context = this,
+            windowManager = windowManager,
+            overlayWindowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            onToggleRunPause = { toggleRunOrPause(this) },
+            onStopBot = { stopBot(this) },
+            onToggleCalibration = { toggleCalibrationOverlayInternal(autoDetect = false) },
+            onOpenApp = { openMainApp() },
+        )
+
+        appOverlayCalibration = CalibrationOverlayManager(
+            context = this,
+            windowManager = windowManager,
+            overlayWindowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            onSaveCalibration = { updated ->
+                BotStateStore.updateCalibration(updated)
+                configStorage.saveCalibration(updated)
+            },
+            onRunAutoCalibrate = { profile, callback ->
+                performAutoCalibration(profile, callback)
+            },
+            onRunLiveOcrTest = { profile, callback ->
+                performLiveOcrDiagnostic(profile, callback)
+            },
+            onSetOtherOverlaysHidden = { hidden ->
+                setAllHudsHidden(hidden)
+            },
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_START_ADB_BRIDGE -> {
+                val autoStartBot = intent.getBooleanExtra(EXTRA_AUTO_START_BOT, true)
+                val showHud = intent.getBooleanExtra(EXTRA_SHOW_HUD, true)
+                val openCalib = intent.getBooleanExtra(EXTRA_OPEN_CALIBRATION, false)
+                enterForeground("CoC Auto (ADB Cầu nối: ${BotStateStore.config.value.bridge.mode.label})", useMediaProjectionType = false)
+                if (showHud) showBestFloatingHud()
+                if (openCalib) showBestCalibrationOverlay(autoDetectImmediately = true)
+                if (autoStartBot) {
+                    startBotLoop()
+                }
+            }
+
+            ACTION_TOGGLE_FLOATING_HUD -> {
+                enterForeground("CoC Auto — Icon nổi sẵn sàng", useMediaProjectionType = false)
+                toggleBestFloatingHud()
+            }
+
             ACTION_START_PROJECTION -> {
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
                 val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -85,15 +151,13 @@ class BotForegroundService : Service() {
                 if (resultCode == Activity.RESULT_OK && resultData != null) {
                     val started = captureManager.start(resultCode, resultData)
                     if (started || canUseAccessibilityCapture()) {
-                        CocAccessibilityService.instance?.showFloatingHud(startExpanded = false)
-                        if (autoStartBot) {
-                            startBotLoop()
-                        }
+                        showBestFloatingHud()
+                        if (autoStartBot) startBotLoop()
                     } else {
                         stopSelfSafely()
                     }
                 } else if (canUseAccessibilityCapture()) {
-                    CocAccessibilityService.instance?.showFloatingHud(startExpanded = false)
+                    showBestFloatingHud()
                     if (autoStartBot) startBotLoop()
                 } else {
                     BotStateStore.log("Quyền chụp màn hình không hợp lệ.", LogLevel.ERROR)
@@ -103,11 +167,9 @@ class BotForegroundService : Service() {
 
             ACTION_START_ACCESSIBILITY_ENGINE -> {
                 val autoStartBot = intent.getBooleanExtra(EXTRA_AUTO_START_BOT, true)
-                enterForeground("CoC Auto đang dùng chụp màn hình Trợ năng (Android 11+)", useMediaProjectionType = false)
-                CocAccessibilityService.instance?.showFloatingHud(startExpanded = false)
-                if (autoStartBot) {
-                    startBotLoop()
-                }
+                enterForeground("CoC Auto đang chạy (Trợ năng Android 11+)", useMediaProjectionType = false)
+                showBestFloatingHud()
+                if (autoStartBot) startBotLoop()
             }
 
             ACTION_TOGGLE_RUN_PAUSE -> {
@@ -149,9 +211,14 @@ class BotForegroundService : Service() {
 
     override fun onDestroy() {
         stopBotLoop()
+        bridgeManager.disconnectAll()
         captureManager.stop()
         ocrEngine.close()
         releaseWakeLock()
+        mainHandler.post {
+            appOverlayCalibration?.hide()
+            appOverlayHud?.hide()
+        }
         CocAccessibilityService.instance?.hideFloatingHud()
         CocAccessibilityService.instance?.hideCalibrationOverlay()
         serviceScope.cancel()
@@ -159,38 +226,111 @@ class BotForegroundService : Service() {
         super.onDestroy()
     }
 
+    private fun canDrawAppOverlay(): Boolean = Settings.canDrawOverlays(this)
+
+    private fun showBestFloatingHud() {
+        mainHandler.post {
+            if (canDrawAppOverlay()) {
+                appOverlayHud?.show(startExpanded = false)
+            } else {
+                CocAccessibilityService.instance?.showFloatingHud(startExpanded = false)
+            }
+        }
+    }
+
+    private fun toggleBestFloatingHud() {
+        mainHandler.post {
+            if (canDrawAppOverlay()) {
+                val hud = appOverlayHud ?: return@post
+                if (hud.isShowing) hud.hide() else hud.show(startExpanded = false)
+            } else {
+                CocAccessibilityService.instance?.toggleFloatingHud()
+            }
+        }
+    }
+
+    private fun showBestCalibrationOverlay(autoDetectImmediately: Boolean) {
+        mainHandler.post {
+            if (canDrawAppOverlay()) {
+                appOverlayCalibration?.show(BotStateStore.calibration.value, autoDetectImmediately)
+            } else {
+                CocAccessibilityService.instance?.showCalibrationOverlay(autoDetectImmediately)
+            }
+        }
+    }
+
+    private fun toggleCalibrationOverlayInternal(autoDetect: Boolean) {
+        mainHandler.post {
+            if (canDrawAppOverlay()) {
+                val cal = appOverlayCalibration ?: return@post
+                if (cal.isShowing) cal.hide() else cal.show(BotStateStore.calibration.value, autoDetect)
+            } else {
+                CocAccessibilityService.instance?.toggleCalibrationOverlay()
+            }
+        }
+    }
+
+    private fun setAllHudsHidden(hidden: Boolean) {
+        mainHandler.post {
+            appOverlayHud?.setTemporarilyHidden(hidden)
+            CocAccessibilityService.instance?.setHudTemporarilyHidden(hidden)
+        }
+    }
+
+    private fun openMainApp() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        runCatching { startActivity(intent) }
+    }
+
     private fun canUseAccessibilityCapture(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && CocAccessibilityService.instance != null
     }
 
     private fun startBotLoop() {
-        if (CocAccessibilityService.instance == null) {
-            BotStateStore.log("Chưa bật Dịch vụ Trợ năng (AccessibilityService).", LogLevel.ERROR)
-            return
-        }
-        if (!captureManager.isReady && !canUseAccessibilityCapture()) {
-            BotStateStore.log("Chưa cấp quyền chụp màn hình (MediaProjection).", LogLevel.ERROR)
-            return
+        val backendMode = BotStateStore.config.value.bridge.mode
+        if (backendMode == ControlBackendMode.ACCESSIBILITY_LEGACY) {
+            if (CocAccessibilityService.instance == null) {
+                BotStateStore.log("Chế độ Trợ năng: Chưa bật Dịch vụ Trợ năng.", LogLevel.ERROR)
+                return
+            }
+            if (!captureManager.isReady && !canUseAccessibilityCapture()) {
+                BotStateStore.log("Chưa cấp quyền chụp màn hình.", LogLevel.ERROR)
+                return
+            }
         }
         if (botJob?.isActive == true) return
 
         acquireWakeLockIfNeeded()
-        CocAccessibilityService.instance?.showFloatingHud(startExpanded = false)
+        showBestFloatingHud()
         BotStateStore.resetStats()
         BotStateStore.updateRuntime {
-            it.copy(status = BotRunStatus.RUNNING, currentAction = "Đang khởi động engine...")
+            it.copy(status = BotRunStatus.RUNNING, currentAction = "Đang kết nối ${backendMode.label}...")
         }
-        updateNotification("Auto Clash of Clans đang chạy")
+        updateNotification("CoC Auto đang chạy (${backendMode.label})")
 
         val execCtx = BotExecutionContext(
             appContext = applicationContext,
+            bridgeManager = bridgeManager,
             captureManager = captureManager,
             ocrEngine = ocrEngine,
             screenDetector = screenDetector,
+            onSetHudHidden = { hidden -> setAllHudsHidden(hidden) },
         )
 
         botJob = serviceScope.launch {
             try {
+                if (backendMode != ControlBackendMode.ACCESSIBILITY_LEGACY) {
+                    val check = bridgeManager.testActiveBridge()
+                    if (check.isFailure) {
+                        BotStateStore.log(
+                            "Không kết nối được ${backendMode.label}: ${check.exceptionOrNull()?.message}",
+                            LogLevel.ERROR,
+                        )
+                        return@launch
+                    }
+                }
                 orchestrator.runMainLoop(execCtx)
             } catch (_: CancellationException) {
                 BotStateStore.log("Đã dừng vòng lặp auto.", LogLevel.INFO)
@@ -216,12 +356,17 @@ class BotForegroundService : Service() {
 
     private fun stopSelfSafely() {
         stopBotLoop()
+        bridgeManager.disconnectAll()
         captureManager.stop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private suspend fun captureDiagnosticFrame(): Bitmap? {
+        val adbBridge = bridgeManager.activeAdbBridge()
+        if (adbBridge != null) {
+            adbBridge.captureScreen()?.let { return it }
+        }
         if (captureManager.isReady) {
             captureManager.captureFrame(maxRetries = 3)?.let { return it }
         }
@@ -231,26 +376,47 @@ class BotForegroundService : Service() {
         return null
     }
 
+    private fun performAutoCalibration(
+        currentProfile: CalibrationProfile,
+        onResult: (AutoCalibrationResult?) -> Unit,
+    ) {
+        serviceScope.launch {
+            val frame = captureDiagnosticFrame()
+            if (frame == null) {
+                onResult(null)
+                return@launch
+            }
+            try {
+                val result = AutoCalibrationEngine.detectFromFrame(frame, currentProfile, ocrEngine)
+                if (result.hasDetections) {
+                    BotStateStore.updateCalibration(result.profile)
+                    configStorage.saveCalibration(result.profile)
+                    BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = result.summaryText()) }
+                    BotStateStore.log(result.summaryText(), LogLevel.SUCCESS)
+                } else {
+                    BotStateStore.log(result.summaryText(), LogLevel.WARN)
+                }
+                onResult(result)
+            } finally {
+                if (!frame.isRecycled) frame.recycle()
+            }
+        }
+    }
+
     private fun performLiveOcrDiagnostic(
         profile: CalibrationProfile,
         onResult: (String) -> Unit,
     ) {
-        if (!captureManager.isReady && !canUseAccessibilityCapture()) {
-            onResult("Chưa có quyền chụp màn hình! Hãy bật Trợ năng (Android 11+) hoặc cấp MediaProjection.")
-            return
-        }
         serviceScope.launch {
             val frame = captureDiagnosticFrame()
             if (frame == null) {
-                onResult("Không chụp được ảnh màn hình. Nếu mới cập nhật app, hãy tắt rồi bật lại Dịch vụ Trợ năng CoC Auto!")
+                onResult("Không chụp được ảnh từ ${BotStateStore.config.value.bridge.mode.label}. Kiểm tra kết nối ADB!")
                 return@launch
             }
             try {
-                val state = screenDetector.analyzeScreen(
-                    frame,
-                    profile,
-                    BotStateStore.runtime.value.foregroundPackage,
-                )
+                val fg = bridgeManager.activeAdbBridge()?.getForegroundPackage().orEmpty()
+                    .ifBlank { BotStateStore.runtime.value.foregroundPackage }
+                val state = screenDetector.analyzeScreen(frame, profile, fg)
                 val homeRes = screenDetector.readHomeResources(frame, profile)
                 val fill = screenDetector.readStorageFillLevels(frame, profile)
                 val builders = screenDetector.readBuilderStatus(frame, profile)
@@ -335,7 +501,7 @@ class BotForegroundService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("CoC Auto Helper")
+            .setContentTitle("CoC Auto Helper (ADB)")
             .setContentText(statusText)
             .setOngoing(true)
             .setContentIntent(openAppIntent)
@@ -350,7 +516,7 @@ class BotForegroundService : Service() {
             "CoC Auto Service",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Dịch vụ chụp màn hình và chạy tự động Clash of Clans"
+            description = "Dịch vụ chạy tự động Clash of Clans qua ADB cầu nối"
         }
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(channel)
@@ -360,6 +526,8 @@ class BotForegroundService : Service() {
         private const val CHANNEL_ID = "coc_auto_engine_channel"
         private const val NOTIF_ID = 4201
 
+        const val ACTION_START_ADB_BRIDGE = "com.cocauto.helper.ACTION_START_ADB_BRIDGE"
+        const val ACTION_TOGGLE_FLOATING_HUD = "com.cocauto.helper.ACTION_TOGGLE_FLOATING_HUD"
         const val ACTION_START_PROJECTION = "com.cocauto.helper.ACTION_START_PROJECTION"
         const val ACTION_START_ACCESSIBILITY_ENGINE = "com.cocauto.helper.ACTION_START_ACCESSIBILITY_ENGINE"
         const val ACTION_TOGGLE_RUN_PAUSE = "com.cocauto.helper.ACTION_TOGGLE_RUN_PAUSE"
@@ -369,9 +537,41 @@ class BotForegroundService : Service() {
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_AUTO_START_BOT = "extra_auto_start_bot"
+        const val EXTRA_SHOW_HUD = "extra_show_hud"
+        const val EXTRA_OPEN_CALIBRATION = "extra_open_calibration"
 
         @Volatile
         private var instance: BotForegroundService? = null
+
+        fun startAdbBridge(
+            context: Context,
+            autoStartBot: Boolean = true,
+            showHud: Boolean = true,
+            openCalibration: Boolean = false,
+        ) {
+            val intent = Intent(context, BotForegroundService::class.java).apply {
+                action = ACTION_START_ADB_BRIDGE
+                putExtra(EXTRA_AUTO_START_BOT, autoStartBot)
+                putExtra(EXTRA_SHOW_HUD, showHud)
+                putExtra(EXTRA_OPEN_CALIBRATION, openCalibration)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun toggleFloatingHud(context: Context) {
+            val intent = Intent(context, BotForegroundService::class.java).apply {
+                action = ACTION_TOGGLE_FLOATING_HUD
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
 
         fun startWithProjection(
             context: Context,
@@ -433,22 +633,26 @@ class BotForegroundService : Service() {
             currentProfile: CalibrationProfile,
             onResult: (AutoCalibrationResult?) -> Unit,
         ) {
-            val appCtx = context.applicationContext
             val svc = instance
+            if (svc != null) {
+                svc.performAutoCalibration(currentProfile, onResult)
+                return
+            }
+            val appCtx = context.applicationContext
             CoroutineScope(Dispatchers.Default).launch {
-                val frame = svc?.captureDiagnosticFrame()
+                val tempBridge = DeviceBridgeManager(appCtx)
+                val frame = tempBridge.activeAdbBridge()?.captureScreen()
                     ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         CocAccessibilityService.instance?.takeScreenshotBitmap()
                     } else {
                         null
                     }
                 if (frame == null) {
+                    tempBridge.disconnectAll()
                     onResult(null)
                     return@launch
                 }
-
-                val ownOcr = svc == null
-                val ocr = svc?.ocrEngine ?: OcrEngine()
+                val ocr = OcrEngine()
                 try {
                     val result = AutoCalibrationEngine.detectFromFrame(frame, currentProfile, ocr)
                     if (result.hasDetections) {
@@ -456,13 +660,12 @@ class BotForegroundService : Service() {
                         ConfigStorage(appCtx).saveCalibration(result.profile)
                         BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = result.summaryText()) }
                         BotStateStore.log(result.summaryText(), LogLevel.SUCCESS)
-                    } else {
-                        BotStateStore.log(result.summaryText(), LogLevel.WARN)
                     }
                     onResult(result)
                 } finally {
                     if (!frame.isRecycled) frame.recycle()
-                    if (ownOcr) ocr.close()
+                    ocr.close()
+                    tempBridge.disconnectAll()
                 }
             }
         }
@@ -473,36 +676,39 @@ class BotForegroundService : Service() {
                 svc.performLiveOcrDiagnostic(profile, onResult)
                 return
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && CocAccessibilityService.instance != null) {
-                // Start lightweight service on Android 11+ or run directly via Accessibility screenshot
-                CoroutineScope(Dispatchers.Default).launch {
-                    val frame = CocAccessibilityService.instance?.takeScreenshotBitmap()
-                    if (frame == null) {
-                        onResult("Không chụp được ảnh từ Trợ năng. Hãy tắt rồi bật lại Trợ năng CoC Auto!")
-                        return@launch
+            val appCtx = context.applicationContext
+            CoroutineScope(Dispatchers.Default).launch {
+                val tempBridge = DeviceBridgeManager(appCtx)
+                val frame = tempBridge.activeAdbBridge()?.captureScreen()
+                    ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        CocAccessibilityService.instance?.takeScreenshotBitmap()
+                    } else {
+                        null
                     }
-                    val tempOcr = OcrEngine()
-                    val tempDetector = ScreenStateDetector(tempOcr)
-                    try {
-                        val state = tempDetector.analyzeScreen(
-                            frame,
-                            profile,
-                            BotStateStore.runtime.value.foregroundPackage,
-                        )
-                        val homeRes = tempDetector.readHomeResources(frame, profile)
-                        val builders = tempDetector.readBuilderStatus(frame, profile)
-                        val loot = tempDetector.readEnemyLoot(frame, profile)
-                        val summary = "Ảnh ${frame.width}x${frame.height} | Màn: ${state.state.label} | Thợ: ${builders.freeBuilders}/${builders.totalBuilders} | Nhà(V/D/DE): ${homeRes.gold}/${homeRes.elixir}/${homeRes.darkElixir} | Loot: ${loot.gold}/${loot.elixir}/${loot.darkElixir}"
-                        BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = summary) }
-                        BotStateStore.log("OCR Test: $summary", LogLevel.INFO)
-                        onResult(summary)
-                    } finally {
-                        if (!frame.isRecycled) frame.recycle()
-                        tempOcr.close()
-                    }
+                if (frame == null) {
+                    tempBridge.disconnectAll()
+                    onResult("Không chụp được ảnh. Hãy kết nối ADB Cầu nối (Shizuku / ADB TCP / PC Bridge) trước!")
+                    return@launch
                 }
-            } else {
-                onResult("Dịch vụ chụp màn hình chưa chạy. Hãy cấp quyền Chụp màn hình trong app trước.")
+                val ocr = OcrEngine()
+                val detector = ScreenStateDetector(ocr)
+                try {
+                    val fg = tempBridge.activeAdbBridge()?.getForegroundPackage().orEmpty()
+                        .ifBlank { BotStateStore.runtime.value.foregroundPackage }
+                    val state = detector.analyzeScreen(frame, profile, fg)
+                    val homeRes = detector.readHomeResources(frame, profile)
+                    val fill = detector.readStorageFillLevels(frame, profile)
+                    val builders = detector.readBuilderStatus(frame, profile)
+                    val loot = detector.readEnemyLoot(frame, profile)
+                    val summary = "Ảnh ${frame.width}x${frame.height} | Màn: ${state.state.label} | Thợ: ${builders.freeBuilders}/${builders.totalBuilders} | Nhà(V/D): ${homeRes.gold}(${fill.goldPercent}%)/${homeRes.elixir}(${fill.elixirPercent}%) | Loot: ${loot.gold}/${loot.elixir}/${loot.darkElixir}"
+                    BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = summary) }
+                    BotStateStore.log("OCR Test: $summary", LogLevel.INFO)
+                    onResult(summary)
+                } finally {
+                    if (!frame.isRecycled) frame.recycle()
+                    ocr.close()
+                    tempBridge.disconnectAll()
+                }
             }
         }
     }

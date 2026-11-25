@@ -37,9 +37,9 @@ class BotOrchestrator(
             try {
                 ctx.ensureRunning()
 
-                // Step 1: Ensure Clash of Clans is in foreground
-                val fgPkg = BotStateStore.runtime.value.foregroundPackage
-                if (fgPkg != ScreenStateDetector.COC_PACKAGE) {
+                // Step 1: Ensure Clash of Clans is in foreground (via ADB dumpsys or Accessibility events)
+                val fgPkg = ctx.readForegroundPackage()
+                if (fgPkg.isNotBlank() && fgPkg != ScreenStateDetector.COC_PACKAGE) {
                     if (ctx.config.safety.autoRelaunchGame) {
                         BotStateStore.updateRuntime {
                             it.copy(
@@ -67,7 +67,7 @@ class BotOrchestrator(
                 }
 
                 if (analysis == null) {
-                    BotStateStore.setAction("Chưa chụp được màn hình — hãy tắt rồi bật lại Trợ năng CoC Auto")
+                    BotStateStore.setAction("Chưa chụp được ảnh qua ${ctx.config.bridge.mode.label} — kiểm tra kết nối ADB")
                     ctx.sleep(1_200L)
                     continue
                 }
@@ -169,7 +169,7 @@ class BotOrchestrator(
 
     private suspend fun runSilentAutoCalibration(ctx: BotExecutionContext) {
         BotStateStore.setAction("Đang tự nhận diện vị trí nút & tài nguyên...")
-        ctx.accessibility?.setHudTemporarilyHidden(true)
+        ctx.setHudTemporarilyHidden(true)
         try {
             ctx.sleep(140L)
             val result = ctx.withFrame { frame ->
@@ -183,7 +183,7 @@ class BotOrchestrator(
                 BotStateStore.log(result.summaryText(), LogLevel.SUCCESS)
             }
         } finally {
-            ctx.accessibility?.setHudTemporarilyHidden(false)
+            ctx.setHudTemporarilyHidden(false)
         }
     }
 

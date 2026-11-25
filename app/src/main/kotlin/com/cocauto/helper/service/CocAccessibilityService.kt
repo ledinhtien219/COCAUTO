@@ -53,6 +53,7 @@ class CocAccessibilityService : AccessibilityService() {
         hudManager = FloatingHudManager(
             context = this,
             windowManager = windowManager,
+            overlayWindowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             onToggleRunPause = {
                 val canCaptureViaAccessibility = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                 if (!BotStateStore.runtime.value.mediaProjectionReady && !canCaptureViaAccessibility) {
@@ -71,6 +72,7 @@ class CocAccessibilityService : AccessibilityService() {
         calibrationOverlay = CalibrationOverlayManager(
             context = this,
             windowManager = windowManager,
+            overlayWindowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             onSaveCalibration = { updated ->
                 BotStateStore.updateCalibration(updated)
                 configStorage.saveCalibration(updated)

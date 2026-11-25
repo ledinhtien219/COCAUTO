@@ -1,8 +1,8 @@
 {
-  "versionCode": 10,
-  "versionName": "1.6.0",
-  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.6.0.apk",
-  "changelog": "- Nâng cấp Auto Đánh theo quân có sẵn (AutoTroopBarDetector): tự quét thẻ quân x30/x20/x8... + Tướng/Phép thực tế trên thanh quân để thả hết quân, kèm đợt vét quân còn sót\n- Tự xác nhận hộp thoại cảnh báo Khiên (Shield) khi bấm Tìm trận\n- Mở rộng nhận diện màn hình Soi nhà (BATTLE_SCOUT) & hỗ trợ bấm Chạy ngay khi đang đứng ở màn hình Soi nhà",
+  "versionCode": 11,
+  "versionName": "2.0.0",
+  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v2.0.0.apk",
+  "changelog": "- Chuyển toàn bộ app sang kiến trúc ADB Cầu nối — KHÔNG cần bật Dịch vụ Trợ năng (AccessibilityService) và KHÔNG cần MediaProjection!\n- Hỗ trợ 3 chế độ ADB: Shizuku (ADB trên điện thoại qua Gỡ lỗi không dây), ADB TCP trực tiếp (127.0.0.1:5555), và ADB Cầu nối PC (USB / Wi-Fi)\n- Icon tròn di chuyển được & khung hiệu chỉnh chạy qua quyền Hiển thị trên ứng dụng khác (TYPE_APPLICATION_OVERLAY)",
   "sha256": "",
   "mandatory": false
 }

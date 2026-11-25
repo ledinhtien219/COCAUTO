@@ -238,7 +238,6 @@ fun CalibrationAndLogsTab(
             Button(
                 onClick = onOpenCalibrationOverlay,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = runtime.accessibilityConnected,
             ) {
                 Icon(Icons.Default.Tune, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
@@ -249,7 +248,6 @@ fun CalibrationAndLogsTab(
             OutlinedButton(
                 onClick = onRunOcrTestNow,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = runtime.mediaProjectionReady || runtime.accessibilityConnected,
             ) {
                 Icon(Icons.Default.Search, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))

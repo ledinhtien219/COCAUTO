@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.cocauto.helper.bridge.DeviceBridgeManager
 import com.cocauto.helper.data.ConfigStorage
 import com.cocauto.helper.model.AspectPreset
 import com.cocauto.helper.model.BotConfig
@@ -23,6 +24,7 @@ import java.io.File
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val storage = ConfigStorage(application)
     private val updater = AppUpdater(application)
+    val bridgeManager = DeviceBridgeManager(application)
 
     val runtime: StateFlow<BotRuntimeSnapshot> = BotStateStore.runtime
     val config: StateFlow<BotConfig> = BotStateStore.config
@@ -122,5 +124,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearLogs() {
         BotStateStore.clearLogs()
+    }
+
+    fun testActiveBridge(onResult: ((Result<String>) -> Unit)? = null) {
+        viewModelScope.launch {
+            val res = bridgeManager.testActiveBridge()
+            onResult?.invoke(res)
+        }
+    }
+
+    fun requestShizukuPermission() {
+        bridgeManager.shizukuBridge.requestShizukuPermission()
+    }
+
+    fun isShizukuRunning(): Boolean = bridgeManager.shizukuBridge.isShizukuBinderAlive()
+
+    fun hasShizukuPermission(): Boolean = bridgeManager.shizukuBridge.hasShizukuPermission()
+
+    override fun onCleared() {
+        bridgeManager.disconnectAll()
+        super.onCleared()
     }
 }
