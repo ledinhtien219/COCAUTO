@@ -285,16 +285,22 @@ class HomeFarmEngine {
 
             when (analysis?.state) {
                 GameScreenState.BATTLE_SUMMARY -> {
-                    ctx.tap(analysis.suggestedTapPoint ?: cal.returnHomeButton, delayAfter = false)
-                    ctx.sleep(900L)
+                    BotStateStore.setAction("Đánh xong — quay về làng ngay!", GameScreenState.BATTLE_SUMMARY)
+                    BotStateStore.log("Trận đánh kết thúc — bấm Về làng ngay để chạy chu kỳ tiếp theo!", LogLevel.SUCCESS)
+                    returnHomeAndConfirmVillage(ctx, analysis.suggestedTapPoint ?: cal.returnHomeButton)
                     recordAttackSuccess(targetLoot)
-                    dismissPostBattlePopups(ctx)
                     return
                 }
 
                 GameScreenState.HOME_VILLAGE -> {
                     recordAttackSuccess(targetLoot)
                     return
+                }
+
+                GameScreenState.POPUP_DIALOG -> {
+                    // Reward chest / Star bonus popped up immediately at end of battle
+                    ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.88f), delayAfter = false)
+                    ctx.sleep(450L)
                 }
 
                 GameScreenState.DISCONNECTED_DIALOG -> {
@@ -319,7 +325,7 @@ class HomeFarmEngine {
                             emptyTroopsSinceMs = null
                         }
                     }
-                    ctx.sleep(1_000L)
+                    ctx.sleep(700L)
                 }
             }
         }
@@ -332,8 +338,8 @@ class HomeFarmEngine {
 
     private suspend fun triggerSurrenderAndReturn(ctx: BotExecutionContext) {
         val cal = ctx.calibration
-        ctx.tap(cal.endBattleButton)
-        ctx.sleep(750L)
+        ctx.tap(cal.endBattleButton, delayAfter = false)
+        ctx.sleep(500L)
 
         // Dynamically locate "Okay" / "Đồng ý" / "OK" button in surrender confirmation dialog via OCR
         val confirmTap = ctx.withFrame { frame ->
@@ -341,26 +347,63 @@ class HomeFarmEngine {
             dialogOcr.lines.firstOrNull { ResourceParser.isConfirmDialogButtonText(it.text) }?.center
         } ?: cal.surrenderConfirmButton
 
-        ctx.tap(confirmTap)
-        ctx.sleep(1_400L)
+        ctx.tap(confirmTap, delayAfter = false)
+        ctx.sleep(850L)
 
         val returnTap = ctx.withFrame { frame ->
             val sumOcr = ctx.ocrEngine.recognizeRoi(frame, cal.returnHomeRoi, enhance = true)
             sumOcr.lines.firstOrNull { ResourceParser.isReturnHomeText(it.text) }?.center
         } ?: cal.returnHomeButton
 
-        ctx.tap(returnTap)
-        ctx.sleep(2_000L)
-        dismissPostBattlePopups(ctx)
+        returnHomeAndConfirmVillage(ctx, returnTap)
     }
 
-    private suspend fun dismissPostBattlePopups(ctx: BotExecutionContext) {
-        val analysis = ctx.withFrame { frame ->
-            ctx.screenDetector.analyzeScreen(frame, ctx.calibration, BotStateStore.runtime.value.foregroundPackage)
-        }
-        if (analysis?.state == GameScreenState.POPUP_DIALOG) {
-            ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.72f))
-            ctx.sleep(600L)
+    /**
+     * Taps "Về làng" ("Return Home") immediately, retries if the summary screen is still animating,
+     * auto-dismisses any post-battle Star Bonus / Treasure Chest ("Tiếp tục" / "OK") popup,
+     * and returns the instant Home Village is ready so the next farm cycle starts right away!
+     */
+    private suspend fun returnHomeAndConfirmVillage(
+        ctx: BotExecutionContext,
+        initialReturnPoint: NormPoint,
+    ) {
+        val cal = ctx.calibration
+        ctx.tap(initialReturnPoint, delayAfter = false)
+        ctx.sleep(650L)
+
+        val deadline = System.currentTimeMillis() + 9_000L
+        while (System.currentTimeMillis() < deadline) {
+            ctx.ensureRunning()
+            val analysis = ctx.withFrame { frame ->
+                ctx.screenDetector.analyzeScreen(frame, cal, BotStateStore.runtime.value.foregroundPackage)
+            }
+            when (analysis?.state) {
+                GameScreenState.HOME_VILLAGE -> {
+                    BotStateStore.setAction("Đã về làng — chạy lệnh tiếp theo!", GameScreenState.HOME_VILLAGE)
+                    return
+                }
+
+                GameScreenState.BATTLE_SUMMARY -> {
+                    // Summary button hadn't finished fade-in on previous tap -> tap "Về làng" again immediately
+                    ctx.tap(analysis.suggestedTapPoint ?: cal.returnHomeButton, delayAfter = false)
+                    ctx.sleep(600L)
+                }
+
+                GameScreenState.POPUP_DIALOG -> {
+                    // Dismiss Star Bonus / Chest Reward ("Tiếp tục" / "OK") immediately
+                    BotStateStore.setAction("Đóng phần thưởng sau trận...", GameScreenState.POPUP_DIALOG)
+                    ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.88f), delayAfter = false)
+                    ctx.sleep(500L)
+                }
+
+                GameScreenState.LOADING -> {
+                    ctx.sleep(400L)
+                }
+
+                else -> {
+                    ctx.sleep(450L)
+                }
+            }
         }
     }
 

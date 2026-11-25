@@ -496,6 +496,24 @@ object ResourceParser {
             norm.contains("return to")
     }
 
+    /**
+     * Detects the post-battle Victory / Defeat summary screen reliably even if stylized
+     * font OCR slightly garbles the short "Về làng" button label.
+     */
+    fun isBattleSummaryScreenText(raw: String): Boolean {
+        val norm = normalizeForMatch(raw)
+        return isReturnHomeText(norm) ||
+            norm.contains("chien thang") ||
+            norm.contains("bai tran") ||
+            norm.contains("victory") ||
+            norm.contains("defeat") ||
+            norm.contains("ban nhan duoc") ||
+            norm.contains("you got") ||
+            norm.contains("so binh linh da su dung") ||
+            norm.contains("troops used") ||
+            norm.contains("100% thuong")
+    }
+
     fun isNextButtonText(raw: String): Boolean {
         val norm = normalizeForMatch(raw)
         return norm.contains("next") ||

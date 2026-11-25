@@ -99,4 +99,13 @@ class AdbBridgeParserAndCryptoTest {
         assertEquals(ControlBackendMode.SHIZUKU_ADB, decoded.bridge.mode)
         assertTrue(decoded.bridge.autoConnectOnLaunch)
     }
+
+    @Test
+    fun battleSummaryAndRewardChestDetectors_matchVietnamese2026Screens() {
+        assertTrue(com.cocauto.helper.vision.ResourceParser.isReturnHomeText("Về làng"))
+        assertTrue(com.cocauto.helper.vision.ResourceParser.isBattleSummaryScreenText("CHIẾN THẮNG Bạn nhận được: 181 257"))
+        assertTrue(com.cocauto.helper.vision.ResourceParser.isBattleSummaryScreenText("Bại trận Số binh lính đã sử dụng"))
+        assertTrue(com.cocauto.helper.vision.ResourceParser.isStarBonusOrRewardPopup("Vật phẩm đã được chuyển vào Kho chứa tạm thời. Tiếp tục"))
+        assertTrue(com.cocauto.helper.vision.ResourceParser.isConfirmDialogButtonText("Tiếp tục"))
+    }
 }

@@ -110,14 +110,27 @@ class ScreenStateDetector(
             return ScreenAnalysis(GameScreenState.POPUP_DIALOG, okTap, centerText.take(60), fullLines = lines)
         }
 
-        // 2. Battle Summary ("Về làng" / "Return Home" at bottom-center)
+        // 2. Battle Summary ("Về làng" / "Return Home" OR "Chiến thắng" / "Bại trận" / "Bạn nhận được")
         val returnLine = lines.firstOrNull {
-            it.bounds.centerX in 0.30f..0.70f &&
-                it.bounds.centerY > 0.76f &&
+            it.bounds.centerX in 0.28f..0.72f &&
+                it.bounds.centerY > 0.74f &&
                 ResourceParser.isReturnHomeText(it.text)
         }
         if (returnLine != null) {
             return ScreenAnalysis(GameScreenState.BATTLE_SUMMARY, returnLine.center, returnLine.text, fullLines = lines)
+        }
+
+        val hasNextOrEndOnScreen = lines.any {
+            (it.bounds.centerX > 0.74f && it.bounds.centerY in 0.58f..0.86f && ResourceParser.isNextButtonText(it.text)) ||
+                (it.bounds.centerX < 0.24f && it.bounds.centerY in 0.60f..0.86f && ResourceParser.isEndBattleText(it.text))
+        }
+        if (!hasNextOrEndOnScreen && ResourceParser.isBattleSummaryScreenText(centerText)) {
+            return ScreenAnalysis(
+                state = GameScreenState.BATTLE_SUMMARY,
+                suggestedTapPoint = calibration.returnHomeButton,
+                detailText = centerText.take(60),
+                fullLines = lines,
+            )
         }
 
         // 3. Battle Scout ("Tiếp theo" / "Next" at bottom-right) — also pre-parse top-left enemy loot in 0ms!

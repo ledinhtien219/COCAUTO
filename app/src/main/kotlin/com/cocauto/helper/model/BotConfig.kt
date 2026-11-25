@@ -83,7 +83,7 @@ data class HomeFarmConfig(
     val maxBattleDurationSec: Int = 115,
     val earlySurrenderWhenTroopsEmpty: Boolean = false,
     val earlySurrenderWaitSec: Int = 25,
-    val postBattleCooldownSec: Int = 1,
+    val postBattleCooldownSec: Int = 0,
     val stopWhenStorageFull: Boolean = true,
     val fullStorageCondition: FullStorageCondition = FullStorageCondition.GOLD_AND_ELIXIR,
     val fullStorageAction: FullStorageAction = FullStorageAction.PAUSE_WAIT_BUILDER,
