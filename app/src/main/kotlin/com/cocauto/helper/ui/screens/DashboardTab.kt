@@ -484,9 +484,9 @@ fun DashboardTab(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     if (runtime.floatingHudVisible) {
-                        "Ẩn nút icon nổi trên màn hình"
+                        "Ẩn nút Bật/Tắt nổi trên màn hình"
                     } else {
-                        "Hiện nút icon nổi di chuyển được (không cần Trợ năng)"
+                        "Hiện nút Bật/Tắt nổi trên màn hình (1 chạm)"
                     },
                 )
             }

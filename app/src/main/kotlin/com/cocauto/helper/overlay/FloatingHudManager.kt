@@ -2,10 +2,7 @@ package com.cocauto.helper.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -31,10 +28,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.hypot
 
 /**
- * Draggable circular floating icon overlay (chathead style) displayed over Clash of Clans.
- * - Starts compact as a single movable 52dp icon bubble so it never obstructs game buttons or OCR.
- * - Tapping the icon expands a sleek action panel (Run/Pause, Stop, Calibrate, Open App, Hide).
- * - Tapping the icon again or choosing "Chạy" / "Khung" collapses cleanly back into the icon.
+ * Draggable compact on-screen ON/OFF floating toggle pill displayed over Clash of Clans.
+ * - Compact mode: direct 1-tap [▶ BẬT] / [⏹ TẮT] button + [⚙] menu icon, freely draggable anywhere.
+ * - Expanded mode: live status, battle counters, Pause/Resume, Stop, Calibration overlay, Open App, Hide.
  */
 class FloatingHudManager(
     private val context: Context,
@@ -46,7 +42,9 @@ class FloatingHudManager(
     private val onOpenApp: () -> Unit,
 ) {
     private var rootFrame: FrameLayout? = null
-    private var bubbleView: FloatingBubbleIconView? = null
+    private var compactPill: LinearLayout? = null
+    private var compactPowerBtn: TextView? = null
+    private var compactMenuBtn: TextView? = null
     private var panelContainer: LinearLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
 
@@ -55,7 +53,7 @@ class FloatingHudManager(
 
     private var expanded = false
     private var collapsedX = 24
-    private var collapsedY = 180
+    private var collapsedY = 220
 
     private var statusBadge: TextView? = null
     private var actionLabel: TextView? = null
@@ -80,19 +78,16 @@ class FloatingHudManager(
             ).toInt()
         }
 
-        collapsedX = dp(12)
-        collapsedY = dp(84)
+        collapsedX = dp(10)
+        collapsedY = dp(120)
 
         val root = FrameLayout(context)
 
-        // 1. Compact draggable circular floating icon (52dp x 52dp)
-        val iconSize = dp(52)
-        val bubble = FloatingBubbleIconView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(iconSize, iconSize)
-        }
-        bubbleView = bubble
+        // 1. Sleek draggable 1-tap [▶ BẬT / ⏹ TẮT] + [⚙] pill
+        val pill = buildCompactPowerPill(dp)
+        compactPill = pill
 
-        // 2. Expandable control panel (shown only when icon is tapped)
+        // 2. Expandable detailed control panel (opened by tapping [⚙])
         val panel = buildActionPanel(dp).apply {
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
@@ -102,7 +97,7 @@ class FloatingHudManager(
         }
         panelContainer = panel
 
-        root.addView(bubble)
+        root.addView(pill)
         root.addView(panel)
 
         val params = WindowManager.LayoutParams(
@@ -116,16 +111,67 @@ class FloatingHudManager(
             gravity = Gravity.TOP or Gravity.START
             x = collapsedX
             y = collapsedY
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
 
-        // Unified drag + tap detector on the floating circular icon
+        // Attach drag + 1-tap ON/OFF on the main power button
+        compactPowerBtn?.let { powerBtn ->
+            attachDragOrClick(
+                targetView = powerBtn,
+                root = root,
+                params = params,
+                touchSlop = touchSlop,
+            ) {
+                val status = BotStateStore.runtime.value.status
+                if (status == BotRunStatus.RUNNING || status == BotRunStatus.WAITING_GAME) {
+                    onStopBot()
+                } else {
+                    onToggleRunPause()
+                }
+            }
+        }
+
+        // Attach drag + expand menu on the [⚙] button
+        compactMenuBtn?.let { menuBtn ->
+            attachDragOrClick(
+                targetView = menuBtn,
+                root = root,
+                params = params,
+                touchSlop = touchSlop,
+            ) {
+                setExpanded(true)
+            }
+        }
+
+        runCatching {
+            windowManager.addView(root, params)
+            rootFrame = root
+            layoutParams = params
+            BotStateStore.updateRuntime { it.copy(floatingHudVisible = true) }
+            setExpanded(startExpanded)
+            startObservingState()
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachDragOrClick(
+        targetView: View,
+        root: FrameLayout,
+        params: WindowManager.LayoutParams,
+        touchSlop: Int,
+        onTap: () -> Unit,
+    ) {
         var downX = 0f
         var downY = 0f
         var startParamX = 0
         var startParamY = 0
         var isDragging = false
 
-        bubble.setOnTouchListener { _, event ->
+        targetView.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.rawX
@@ -144,8 +190,10 @@ class FloatingHudManager(
                     }
                     if (isDragging) {
                         val (screenW, screenH) = currentScreenSize()
-                        params.x = (startParamX + dx.toInt()).coerceIn(0, (screenW - iconSize).coerceAtLeast(0))
-                        params.y = (startParamY + dy.toInt()).coerceIn(0, (screenH - iconSize).coerceAtLeast(0))
+                        val viewW = (compactPill?.width ?: 180).coerceAtLeast(80)
+                        val viewH = (compactPill?.height ?: 80).coerceAtLeast(60)
+                        params.x = (startParamX + dx.toInt()).coerceIn(0, (screenW - viewW).coerceAtLeast(0))
+                        params.y = (startParamY + dy.toInt()).coerceIn(0, (screenH - viewH).coerceAtLeast(0))
                         collapsedX = params.x
                         collapsedY = params.y
                         runCatching { windowManager.updateViewLayout(root, params) }
@@ -155,7 +203,7 @@ class FloatingHudManager(
 
                 MotionEvent.ACTION_UP -> {
                     if (!isDragging) {
-                        setExpanded(true)
+                        onTap()
                     }
                     true
                 }
@@ -163,15 +211,56 @@ class FloatingHudManager(
                 else -> false
             }
         }
+    }
 
-        runCatching {
-            windowManager.addView(root, params)
-            rootFrame = root
-            layoutParams = params
-            BotStateStore.updateRuntime { it.copy(floatingHudVisible = true) }
-            setExpanded(startExpanded)
-            startObservingState()
+    private fun buildCompactPowerPill(dp: (Int) -> Int): LinearLayout {
+        val wrapper = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E6161B22"))
+                cornerRadius = dp(24).toFloat()
+                setStroke(dp(1), Color.parseColor("#F5C451"))
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         }
+
+        val powerBtn = TextView(context).apply {
+            text = "▶ BẬT"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            paint.isFakeBoldText = true
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#2EA043"))
+                cornerRadius = dp(18).toFloat()
+            }
+        }
+        compactPowerBtn = powerBtn
+
+        val menuBtn = TextView(context).apply {
+            text = "⚙"
+            setTextColor(Color.parseColor("#F5C451"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            paint.isFakeBoldText = true
+            gravity = Gravity.CENTER
+            setPadding(dp(9), dp(6), dp(9), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#26303B"))
+                cornerRadius = dp(18).toFloat()
+            }
+        }
+        compactMenuBtn = menuBtn
+
+        wrapper.addView(powerBtn)
+        wrapper.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(dp(4), 1) })
+        wrapper.addView(menuBtn)
+        return wrapper
     }
 
     fun hide() {
@@ -183,7 +272,9 @@ class FloatingHudManager(
             runCatching { windowManager.removeView(view) }
         }
         rootFrame = null
-        bubbleView = null
+        compactPill = null
+        compactPowerBtn = null
+        compactMenuBtn = null
         panelContainer = null
         layoutParams = null
         expanded = false
@@ -202,13 +293,12 @@ class FloatingHudManager(
         expanded = expand
         val root = rootFrame ?: return
         val params = layoutParams ?: return
-        val bubble = bubbleView ?: return
+        val pill = compactPill ?: return
         val panel = panelContainer ?: return
 
         if (expand) {
-            bubble.visibility = View.GONE
+            pill.visibility = View.GONE
             panel.visibility = View.VISIBLE
-            // Ensure expanded panel stays inside screen bounds when opened near right/bottom edges
             val (screenW, screenH) = currentScreenSize()
             panel.measure(
                 View.MeasureSpec.makeMeasureSpec(screenW, View.MeasureSpec.AT_MOST),
@@ -220,11 +310,12 @@ class FloatingHudManager(
             params.y = collapsedY.coerceIn(8, (screenH - panelH - 8).coerceAtLeast(8))
         } else {
             panel.visibility = View.GONE
-            bubble.visibility = View.VISIBLE
+            pill.visibility = View.VISIBLE
             val (screenW, screenH) = currentScreenSize()
-            val iconSize = bubble.layoutParams.width.coerceAtLeast(100)
-            params.x = collapsedX.coerceIn(0, (screenW - iconSize).coerceAtLeast(0))
-            params.y = collapsedY.coerceIn(0, (screenH - iconSize).coerceAtLeast(0))
+            val pillW = pill.width.coerceAtLeast(180)
+            val pillH = pill.height.coerceAtLeast(80)
+            params.x = collapsedX.coerceIn(0, (screenW - pillW).coerceAtLeast(0))
+            params.y = collapsedY.coerceIn(0, (screenH - pillH).coerceAtLeast(0))
         }
         runCatching { windowManager.updateViewLayout(root, params) }
     }
@@ -241,7 +332,6 @@ class FloatingHudManager(
             }
         }
 
-        // Draggable header bar with collapse button
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -273,7 +363,6 @@ class FloatingHudManager(
         headerRow.addView(collapseIcon)
         container.addView(headerRow)
 
-        // Allow dragging the expanded panel by its header too
         var hDownX = 0f
         var hDownY = 0f
         var hStartX = 0
@@ -325,23 +414,21 @@ class FloatingHudManager(
         statsLabel = statsText
         container.addView(statsText)
 
-        // Row 1: Primary controls (Run/Pause + Stop + Calibrate)
         val row1 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val btnRun = makePillButton("▶ Chạy", "#2EA043", dp) {
+        val btnRun = makePillButton("▶ Bật", "#2EA043", dp) {
             val currentlyRunning = BotStateStore.runtime.value.status == BotRunStatus.RUNNING
             onToggleRunPause()
-            // Collapse automatically into the compact bubble when starting so it doesn't cover the game
             if (!currentlyRunning) {
                 setExpanded(false)
             }
         }
         runPauseBtn = btnRun
 
-        val btnStop = makePillButton("⏹ Dừng", "#DA3633", dp) {
+        val btnStop = makePillButton("⏹ Tắt", "#DA3633", dp) {
             onStopBot()
         }
 
@@ -357,7 +444,6 @@ class FloatingHudManager(
         row1.addView(btnCalib)
         container.addView(row1)
 
-        // Row 2: Secondary controls (Open Settings App + Hide floating icon)
         val row2 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -368,7 +454,7 @@ class FloatingHudManager(
             setExpanded(false)
             onOpenApp()
         }
-        val btnHide = makePillButton("Ẩn icon", "#30363D", dp) {
+        val btnHide = makePillButton("Ẩn nút nổi", "#30363D", dp) {
             hide()
         }
 
@@ -385,6 +471,7 @@ class FloatingHudManager(
         uiScope = scope
         collectJob = scope.launch {
             BotStateStore.runtime.collectLatest { snap ->
+                val isRunning = snap.status == BotRunStatus.RUNNING || snap.status == BotRunStatus.WAITING_GAME
                 val color = when (snap.status) {
                     BotRunStatus.RUNNING -> Color.parseColor("#3FB950")
                     BotRunStatus.PAUSED -> Color.parseColor("#F5C451")
@@ -392,7 +479,19 @@ class FloatingHudManager(
                     BotRunStatus.WAITING_GAME -> Color.parseColor("#E3B341")
                     BotRunStatus.STOPPED -> Color.parseColor("#8B949E")
                 }
-                bubbleView?.updateStatus(snap.status, color)
+
+                // Update 1-tap compact ON/OFF button dynamically
+                compactPowerBtn?.let { btn ->
+                    btn.text = if (isRunning) "⏹ TẮT" else "▶ BẬT"
+                    (btn.background as? GradientDrawable)?.setColor(
+                        Color.parseColor(if (isRunning) "#DA3633" else "#2EA043"),
+                    )
+                }
+                (compactPill?.background as? GradientDrawable)?.setStroke(
+                    TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 1.5f, context.resources.displayMetrics).toInt(),
+                    if (isRunning) Color.parseColor("#3FB950") else Color.parseColor("#F5C451"),
+                )
+
                 statusBadge?.setTextColor(color)
                 statusBadge?.text = "● ${snap.status.label}"
                 actionLabel?.text = snap.currentAction
@@ -401,7 +500,7 @@ class FloatingHudManager(
                 runPauseBtn?.text = when (snap.status) {
                     BotRunStatus.RUNNING, BotRunStatus.WAITING_GAME -> "⏸ Tạm dừng"
                     BotRunStatus.PAUSED -> "▶ Tiếp tục"
-                    else -> "▶ Chạy"
+                    else -> "▶ Bật"
                 }
             }
         }
@@ -438,116 +537,5 @@ class FloatingHudManager(
             }
             setOnClickListener { onClick() }
         }
-    }
-}
-
-/**
- * Custom Canvas circular bubble icon with live status ring & play/pause/shield emblem.
- */
-private class FloatingBubbleIconView(context: Context) : View(context) {
-    private var status: BotRunStatus = BotRunStatus.STOPPED
-    private var accentColor: Int = Color.parseColor("#F5C451")
-
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#EB161B22")
-        style = Paint.Style.FILL
-    }
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#F5C451")
-        style = Paint.Style.STROKE
-        strokeWidth = 6f
-    }
-    private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#F5C451")
-        style = Paint.Style.FILL
-    }
-    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#8B949E")
-        style = Paint.Style.FILL
-    }
-    private val dotBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#161B22")
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-    }
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textAlign = Paint.Align.CENTER
-        isFakeBoldText = true
-    }
-
-    fun updateStatus(newStatus: BotRunStatus, color: Int) {
-        status = newStatus
-        accentColor = color
-        ringPaint.color = if (newStatus == BotRunStatus.STOPPED) Color.parseColor("#F5C451") else color
-        dotPaint.color = color
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val cx = width * 0.5f
-        val cy = height * 0.5f
-        val radius = (minOf(width, height) * 0.5f) - 6f
-
-        // Base dark circle + outer status ring
-        canvas.drawCircle(cx, cy, radius, bgPaint)
-        canvas.drawCircle(cx, cy, radius, ringPaint)
-
-        // Center emblem depending on status
-        when (status) {
-            BotRunStatus.RUNNING, BotRunStatus.WAITING_GAME -> {
-                // Crisp double pause-bar / active gear feel -> show active green play arrow + "ON"
-                glyphPaint.color = accentColor
-                val barW = radius * 0.22f
-                val barH = radius * 0.62f
-                val gap = radius * 0.14f
-                canvas.drawRoundRect(
-                    cx - gap - barW,
-                    cy - barH * 0.5f,
-                    cx - gap,
-                    cy + barH * 0.5f,
-                    5f,
-                    5f,
-                    glyphPaint,
-                )
-                canvas.drawRoundRect(
-                    cx + gap,
-                    cy - barH * 0.5f,
-                    cx + gap + barW,
-                    cy + barH * 0.5f,
-                    5f,
-                    5f,
-                    glyphPaint,
-                )
-            }
-
-            BotRunStatus.PAUSED -> {
-                // Gold Play triangle indicating ready to resume
-                glyphPaint.color = accentColor
-                val path = Path().apply {
-                    moveTo(cx - radius * 0.22f, cy - radius * 0.34f)
-                    lineTo(cx + radius * 0.38f, cy)
-                    lineTo(cx - radius * 0.22f, cy + radius * 0.34f)
-                    close()
-                }
-                canvas.drawPath(path, glyphPaint)
-            }
-
-            else -> {
-                // Bold "CoC" emblem when idle/stopped
-                labelPaint.textSize = radius * 0.62f
-                labelPaint.color = Color.parseColor("#F5C451")
-                val textY = cy - (labelPaint.descent() + labelPaint.ascent()) * 0.5f
-                canvas.drawText("CoC", cx, textY, labelPaint)
-            }
-        }
-
-        // Small live status indicator dot at bottom-right of the circular icon
-        val dotR = radius * 0.22f
-        val dotX = cx + radius * 0.68f
-        val dotY = cy + radius * 0.68f
-        canvas.drawCircle(dotX, dotY, dotR, dotPaint)
-        canvas.drawCircle(dotX, dotY, dotR, dotBorderPaint)
     }
 }
