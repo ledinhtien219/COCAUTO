@@ -57,9 +57,9 @@ object DeployStrategyEngine {
         val cfg: HomeFarmConfig = ctx.config.homeFarm
         val cal: CalibrationProfile = ctx.calibration
 
-        BotStateStore.setAction("Zoom bản đồ & quét quân có sẵn (${strategyLabel(cfg.deployStrategy)})")
+        BotStateStore.setAction("Zoom bản đồ & quét quân (${strategyLabel(cfg.deployStrategy)})")
         ctx.zoomOutCamera()
-        ctx.sleep(280L)
+        ctx.sleep(100L)
 
         // 1. Auto-detect all currently available troop/spell/hero cards on the live bottom troop dock!
         val detectedCards = scanAvailableCards(ctx)
@@ -68,7 +68,7 @@ object DeployStrategyEngine {
             val summary = detectedCards.joinToString(", ") {
                 if (it.isVisualFallback) "Thẻ" else it.rawLabel.ifBlank { "x${it.count}" }
             }
-            BotStateStore.log("Phát hiện ${detectedCards.size} ô quân có sẵn ($summary) — bắt đầu thả quân!", LogLevel.SUCCESS)
+            BotStateStore.log("Phát hiện ${detectedCards.size} ô quân ($summary) — thả nhanh theo lô!", LogLevel.SUCCESS)
 
             when (cfg.deployStrategy) {
                 DeployStrategyType.PACED_WAVES -> {
@@ -76,52 +76,38 @@ object DeployStrategyEngine {
                     val dropPoints = planDropPoints(cfg.deployStrategy, cal, cfg.focusedEdges, pointsPerEdge = 5)
                     for (wave in 1..waves) {
                         ctx.ensureRunning()
-                        BotStateStore.setAction("Thả quân có sẵn đợt $wave/$waves")
+                        BotStateStore.setAction("Thả quân nhanh đợt $wave/$waves")
                         val liveCards = if (wave == 1) detectedCards else scanAvailableCards(ctx)
                         if (liveCards.isEmpty()) break
-                        deployDetectedCards(ctx, liveCards, dropPoints, divisor = (waves - wave + 1))
+                        deployDetectedCardsBatch(ctx, liveCards, dropPoints, divisor = (waves - wave + 1))
                         if (wave < waves) {
-                            ctx.sleep(cfg.waveDelayMs.coerceIn(500L, 12_000L))
+                            ctx.sleep(cfg.waveDelayMs.coerceIn(400L, 12_000L))
                         }
                     }
                 }
 
                 else -> {
                     val primaryPoints = planDropPoints(cfg.deployStrategy, cal, cfg.focusedEdges, pointsPerEdge = 6)
-                    deployDetectedCards(ctx, detectedCards, primaryPoints, divisor = 1)
+                    deployDetectedCardsBatch(ctx, detectedCards, primaryPoints, divisor = 1)
                 }
             }
 
-            // 2. Smart OUTWARD cleanup passes along the far outer green grass edges so any leftover troops
-            // (e.g. if a base was very wide or only partially zoomed out) ALWAYS land on deployable grass!
-            val cleanupPointSets = listOf(
-                outerGrassPerimeterPoints(),
-                planDropPoints(
-                    strategy = cfg.deployStrategy,
-                    calibration = cal,
-                    focusedEdges = cfg.focusedEdges,
-                    pointsPerEdge = 5,
-                    insetTowardCenter = 0f,
-                ),
-            )
-            for ((passIdx, sweepPoints) in cleanupPointSets.withIndex()) {
-                ctx.ensureRunning()
-                ctx.sleep(240L)
-                val remaining = scanAvailableCards(ctx).filter { !it.isVisualFallback || passIdx == 0 }
-                if (remaining.isEmpty()) break
-                BotStateStore.setAction("Thả nốt ${remaining.size} ô quân còn lại (viền cỏ xanh ${passIdx + 1})")
-                deployDetectedCards(ctx, remaining, sweepPoints, divisor = 1)
+            // 2. Single fast outward green-grass cleanup pass ONLY if any non-hero troop cards still remain
+            ctx.ensureRunning()
+            ctx.sleep(160L)
+            val remaining = scanAvailableCards(ctx).filter { !it.isVisualFallback }
+            if (remaining.isNotEmpty()) {
+                BotStateStore.setAction("Thả nốt ${remaining.size} ô quân còn lại (viền cỏ xanh)")
+                deployDetectedCardsBatch(ctx, remaining, outerGrassPerimeterPoints(), divisor = 1)
             }
 
-            // 3. Trigger Hero Abilities on visual hero cards (if any) after configured delay
+            // 3. Trigger Hero Abilities on visual hero cards (if any) in one fast batch
             val heroLikeCards = detectedCards.filter { it.isVisualFallback }
             if (heroLikeCards.isNotEmpty() && cfg.triggerHeroAbilityAfterSec > 0) {
-                BotStateStore.setAction("Chờ ${cfg.triggerHeroAbilityAfterSec}s để bật kỹ năng Tướng")
-                ctx.sleep(cfg.triggerHeroAbilityAfterSec * 1_000L)
-                for (hero in heroLikeCards) {
-                    ctx.tap(hero.tapPoint, delayAfter = false)
-                    ctx.sleep(180L)
-                }
+                val waitSec = cfg.triggerHeroAbilityAfterSec.coerceIn(1, 12)
+                BotStateStore.setAction("Chờ ${waitSec}s bật kỹ năng Tướng")
+                ctx.sleep(waitSec * 1_000L)
+                ctx.executeNormalizedBatch(heroLikeCards.map { NormTouchStep(it.tapPoint, holdMs = 45L, pauseAfterMs = 90L) })
             }
             return
         }
@@ -131,44 +117,49 @@ object DeployStrategyEngine {
         executeManualSlotFallback(ctx)
     }
 
-    private suspend fun deployDetectedCards(
+    /**
+     * Executes card selection + spread hold-to-deploy in batched native InputManager sessions
+     * (chunks of 3 cards per batch so Stop/Pause stays responsive while eliminating ~40 ADB shell forks!).
+     */
+    private suspend fun deployDetectedCardsBatch(
         ctx: BotExecutionContext,
         cards: List<DetectedTroopCard>,
         dropPoints: List<NormPoint>,
         divisor: Int,
     ) {
-        if (dropPoints.isEmpty()) return
+        if (dropPoints.isEmpty() || cards.isEmpty()) return
         val safeDiv = divisor.coerceAtLeast(1)
 
-        for ((idx, card) in cards.withIndex()) {
+        val chunks = cards.chunked(3)
+        for ((chunkIdx, chunk) in chunks.withIndex()) {
             ctx.ensureRunning()
-            BotStateStore.setAction("Đang thả ô quân ${idx + 1}/${cards.size} (${card.rawLabel.ifBlank { "x${card.count}" }})")
+            val labelSummary = chunk.joinToString("+") { it.rawLabel.ifBlank { "x${it.count}" } }
+            BotStateStore.setAction("Thả nhanh nhóm ${chunkIdx + 1}/${chunks.size}: $labelSummary")
 
-            // Select this exact troop card on the bottom bar
-            ctx.tap(card.tapPoint, delayAfter = false)
-            ctx.sleep(160L)
+            val batchSteps = mutableListOf<NormTouchStep>()
+            for (card in chunk) {
+                // Select exact troop card on bottom dock
+                batchSteps.add(NormTouchStep(card.tapPoint, holdMs = 40L, pauseAfterMs = 85L))
 
-            val desiredUnits = ((card.count + 2) / safeDiv).coerceIn(2, 60)
-            if (desiredUnits >= 8 && !card.isVisualFallback) {
-                // Fast press-and-hold deployment across spread outer-grass points (~5-8 troops per hold!)
-                val holdSpots = (desiredUnits / 5).coerceIn(4, minOf(12, dropPoints.size))
-                val step = (dropPoints.size.toFloat() / holdSpots).coerceAtLeast(1f)
-                for (s in 0 until holdSpots) {
-                    ctx.ensureRunning()
-                    val pt = dropPoints[(s * step).toInt().coerceIn(0, dropPoints.lastIndex)]
-                    ctx.tap(pt, delayAfter = false, holdMsOverride = 620L)
-                    ctx.sleep(45L)
-                }
-            } else {
-                val totalTaps = desiredUnits.coerceIn(2, 16)
-                for (t in 0 until totalTaps) {
-                    ctx.ensureRunning()
-                    val pt = dropPoints[(t * 2) % dropPoints.size]
-                    ctx.tap(pt, delayAfter = false, holdMsOverride = if (desiredUnits >= 4) 160L else null)
-                    ctx.sleep(55L)
+                val desiredUnits = ((card.count + 2) / safeDiv).coerceIn(2, 60)
+                if (desiredUnits >= 8 && !card.isVisualFallback) {
+                    val holdSpots = (desiredUnits / 6).coerceIn(3, minOf(8, dropPoints.size))
+                    val holdDuration = if (desiredUnits >= 22) 640L else 520L
+                    val step = (dropPoints.size.toFloat() / holdSpots).coerceAtLeast(1f)
+                    for (s in 0 until holdSpots) {
+                        val pt = dropPoints[(s * step).toInt().coerceIn(0, dropPoints.lastIndex)]
+                        batchSteps.add(NormTouchStep(pt, holdMs = holdDuration, pauseAfterMs = 28L))
+                    }
+                } else {
+                    val totalTaps = desiredUnits.coerceIn(2, 8)
+                    val holdDuration = if (desiredUnits >= 4) 170L else 50L
+                    for (t in 0 until totalTaps) {
+                        val pt = dropPoints[(t * 2) % dropPoints.size]
+                        batchSteps.add(NormTouchStep(pt, holdMs = holdDuration, pauseAfterMs = 28L))
+                    }
                 }
             }
-            ctx.sleep(100L)
+            ctx.executeNormalizedBatch(batchSteps)
         }
     }
 

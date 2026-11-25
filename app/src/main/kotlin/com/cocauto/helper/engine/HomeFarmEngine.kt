@@ -19,50 +19,44 @@ import com.cocauto.helper.vision.ResourceParser
  */
 class HomeFarmEngine {
     private var autoCalibratedBattleThisSession = false
+    private var zoomedHomeThisSession = false
+    private var collectCycleCounter = 0
 
     suspend fun collectHomeResources(ctx: BotExecutionContext) {
         val cfg = ctx.config.homeFarm
         if (!cfg.autoCollectResources && !cfg.collectLootCart) return
 
-        BotStateStore.setAction("Thu hoạch mỏ tài nguyên nhà chính", GameScreenState.HOME_VILLAGE)
-        ctx.zoomOutCamera()
-        ctx.sleep(300L)
+        // Harvest on 1st cycle and every 3rd cycle thereafter (mines don't refill in 60s -> saves ~5s/battle!)
+        val shouldCollectThisCycle = (collectCycleCounter % 3 == 0)
+        collectCycleCounter++
+        if (!shouldCollectThisCycle) return
+
+        BotStateStore.setAction("Thu hoạch nhanh mỏ tài nguyên", GameScreenState.HOME_VILLAGE)
+        if (!zoomedHomeThisSession) {
+            ctx.zoomOutCamera()
+            zoomedHomeThisSession = true
+            ctx.sleep(120L)
+        }
 
         if (cfg.autoCollectResources) {
             val bubblePoints = ctx.withFrame { frame ->
-                ImageAnalyzer.findCollectorBubblePoints(frame, maxPoints = 10)
+                ImageAnalyzer.findCollectorBubblePoints(frame, maxPoints = 8)
             }.orEmpty()
 
             if (bubblePoints.isNotEmpty()) {
-                BotStateStore.log("Phát hiện ${bubblePoints.size} bong bóng tài nguyên, đang thu hoạch...", LogLevel.INFO)
-                for (pt in bubblePoints) {
-                    ctx.tap(pt, delayAfter = false)
-                    ctx.sleep(160L)
-                }
-            } else {
-                // Light fallback tap across common inner ring positions if no bubbles popped visually
-                val fallbackPoints = listOf(
-                    NormPoint(0.32f, 0.36f),
-                    NormPoint(0.68f, 0.36f),
-                    NormPoint(0.34f, 0.62f),
-                    NormPoint(0.66f, 0.62f),
-                )
-                for (pt in fallbackPoints) {
-                    ctx.tap(pt, delayAfter = false)
-                    ctx.sleep(150L)
-                }
+                BotStateStore.log("Thu hoạch nhanh ${bubblePoints.size} bong bóng tài nguyên...", LogLevel.INFO)
+                val steps = bubblePoints.map { NormTouchStep(it, holdMs = 35L, pauseAfterMs = 55L) }
+                ctx.executeNormalizedBatch(steps)
             }
-            ctx.tap(ctx.calibration.dismissAreaPoint)
         }
 
         if (cfg.collectLootCart) {
-            BotStateStore.setAction("Kiểm tra Xe cướp tài nguyên (Loot Cart)")
-            ctx.tap(ctx.calibration.lootCartPoint)
-            ctx.sleep(500L)
-            // Tap collect button on Loot Cart dialog if open, otherwise harmless safe area
-            ctx.tap(NormPoint(0.50f, 0.72f))
-            ctx.sleep(350L)
-            ctx.tap(ctx.calibration.dismissAreaPoint)
+            val lootSteps = listOf(
+                NormTouchStep(ctx.calibration.lootCartPoint, holdMs = 40L, pauseAfterMs = 260L),
+                NormTouchStep(NormPoint(0.50f, 0.72f), holdMs = 40L, pauseAfterMs = 150L),
+                NormTouchStep(ctx.calibration.dismissAreaPoint, holdMs = 35L, pauseAfterMs = 50L),
+            )
+            ctx.executeNormalizedBatch(lootSteps)
         }
     }
 
@@ -72,63 +66,77 @@ class HomeFarmEngine {
 
         if (!alreadyInAttackMenu) {
             BotStateStore.setAction("Mở menu Chiến đấu", GameScreenState.HOME_VILLAGE)
-            ctx.tap(ctx.calibration.homeAttackButton)
-            ctx.sleep(1_100L)
+            ctx.tap(ctx.calibration.homeAttackButton, delayAfter = false)
+            ctx.sleep(420L)
         }
 
-        // OCR-guided navigation through the 2025/2026 Battle Hub, Clash Anytime Army Confirmation,
-        // AND Shield Warning confirmation ("Tấn công sẽ giảm thời gian Khiên -> OK / Đồng ý")!
+        // Single-pass OCR navigation: Battle Hub ("Tìm Trận đấu") -> Army Confirm ("Tấn công!") -> Shield dialog -> Clouds
         for (step in 1..4) {
             ctx.ensureRunning()
-            val curState = ctx.withFrame { frame ->
-                ctx.screenDetector.analyzeScreen(frame, ctx.calibration, BotStateStore.runtime.value.foregroundPackage)
-            }
-            if (curState?.state == GameScreenState.SEARCHING_CLOUDS || curState?.state == GameScreenState.BATTLE_SCOUT) {
-                break
-            }
-
-            val nextTap = ctx.withFrame { frame ->
-                val fullMenu = ctx.ocrEngine.recognizeRoi(
-                    frame = frame,
-                    roi = com.cocauto.helper.model.NormRect(0.04f, 0.14f, 0.96f, 0.96f),
-                    enhance = false,
+            val menuResult = ctx.withFrame { frame ->
+                val analysis = ctx.screenDetector.analyzeScreen(
+                    frame,
+                    ctx.calibration,
+                    BotStateStore.runtime.value.foregroundPackage,
                 )
+                if (analysis.state == GameScreenState.SEARCHING_CLOUDS || analysis.state == GameScreenState.BATTLE_SCOUT) {
+                    return@withFrame Triple(analysis.state, "", null as NormPoint?)
+                }
+
+                // Reuse lines already recognized by single-pass analyzeScreen (ZERO second OCR pass!)
+                val lines = analysis.fullLines
+                val fullText = lines.joinToString(" ") { it.text }
 
                 // 1. Handle Shield Warning confirmation dialog ("Khiên / Shield" -> tap "OK" / "Đồng ý")
-                if (ResourceParser.isShieldWarningDialogText(fullMenu.fullText)) {
-                    val confirmBtn = fullMenu.lines
+                val centerDialogText = lines
+                    .filter { it.bounds.centerX in 0.18f..0.82f && it.bounds.centerY in 0.20f..0.80f }
+                    .joinToString(" ") { it.text }
+                if (ResourceParser.isShieldWarningDialogText(centerDialogText)) {
+                    val confirmBtn = lines
                         .filter { it.bounds.centerY > 0.48f }
                         .firstOrNull {
                             ResourceParser.isConfirmDialogButtonText(it.text) ||
                                 ResourceParser.normalizeForMatch(it.text).contains("tan cong") ||
                                 ResourceParser.normalizeForMatch(it.text).contains("attack")
                         }
-                    return@withFrame "Xác nhận tắt Khiên" to (confirmBtn?.center ?: NormPoint(0.585f, 0.635f))
+                    return@withFrame Triple(analysis.state, "Xác nhận tắt Khiên", confirmBtn?.center ?: NormPoint(0.585f, 0.635f))
                 }
 
-                // 2. Prefer Multiplayer "Find a Match" / "Tìm trận" button (lower half of Battle Hub)
-                val lowerLines = fullMenu.lines.filter { it.bounds.centerY > 0.44f }
+                // 2. Find "Tìm Trận đấu" / "Find a Match" or "Tấn công!" directly from fullLines
+                val lowerLines = lines.filter { it.bounds.centerY > 0.44f }
                 val findLine = lowerLines.firstOrNull { line ->
                     val n = ResourceParser.normalizeForMatch(line.text)
                     n.contains("tim tran") || n.contains("find a match") || n.contains("tim doi thu") || n.contains("find now")
                 } ?: lowerLines.firstOrNull { line ->
                     ResourceParser.isAttackMenuText(line.text)
-                } ?: fullMenu.lines.firstOrNull { line ->
+                } ?: lines.firstOrNull { line ->
                     ResourceParser.isAttackMenuText(line.text)
                 }
 
-                findLine?.let { it.text.trim() to it.center }
+                Triple(analysis.state, findLine?.text?.trim().orEmpty(), findLine?.center)
             }
 
-            if (nextTap != null) {
-                BotStateStore.setAction("Bấm '${nextTap.first}' (bước $step)", GameScreenState.ATTACK_MENU)
-                BotStateStore.log("Menu Chiến đấu -> bấm '${nextTap.first}'", LogLevel.INFO)
-                ctx.tap(nextTap.second)
-                ctx.sleep(1_300L)
+            if (menuResult == null) break
+            val (state, label, tapPt) = menuResult
+            if (state == GameScreenState.SEARCHING_CLOUDS || state == GameScreenState.BATTLE_SCOUT) {
+                break
+            }
+
+            if (tapPt != null) {
+                BotStateStore.setAction("Bấm '$label' (bước $step)", GameScreenState.ATTACK_MENU)
+                BotStateStore.log("Menu Chiến đấu -> bấm '$label'", LogLevel.INFO)
+                ctx.tap(tapPt, delayAfter = false)
+                val normLabel = ResourceParser.normalizeForMatch(label)
+                if (normLabel.contains("tan cong") || normLabel == "attack!") {
+                    // Tapping final "Tấn công!" enters matchmaking immediately — don't waste another menu loop!
+                    ctx.sleep(650L)
+                    break
+                }
+                ctx.sleep(480L)
             } else if (step == 1) {
-                BotStateStore.setAction("Bấm Tìm trận (tọa độ mặc định)", GameScreenState.ATTACK_MENU)
-                ctx.tap(ctx.calibration.findMatchButton)
-                ctx.sleep(1_300L)
+                BotStateStore.setAction("Bấm Tìm trận (tọa độ chuẩn)", GameScreenState.ATTACK_MENU)
+                ctx.tap(ctx.calibration.findMatchButton, delayAfter = false)
+                ctx.sleep(480L)
             } else {
                 break
             }
@@ -173,24 +181,21 @@ class HomeFarmEngine {
                 return null
             }
 
-            // Let loot text settle slightly
-            ctx.sleep(500L)
-
-            // Auto-calibrate Battle Scout buttons & Enemy Loot ROI on first battle seen
-            if (!autoCalibratedBattleThisSession && ctx.config.safety.autoCalibrateScreen) {
-                val calResult = ctx.withFrame { frame ->
-                    AutoCalibrationEngine.detectFromFrame(frame, ctx.calibration, ctx.ocrEngine)
-                }
-                if (calResult != null && calResult.hasDetections) {
+            // Zero-extra-capture Battle Auto-Calibration from the OCR lines we ALREADY have!
+            if (!autoCalibratedBattleThisSession && ctx.config.safety.autoCalibrateScreen && scoutAnalysis.fullLines.isNotEmpty()) {
+                val (sw, sh) = ctx.bridgeManager.activeAdbBridge()?.lastCapturedPhysicalSize() ?: (2400 to 1080)
+                val calResult = AutoCalibrationEngine.applyDetectedOcr(ctx.calibration, scoutAnalysis.fullLines, sw, sh)
+                if (calResult.hasDetections) {
                     autoCalibratedBattleThisSession = true
                     BotStateStore.updateCalibration(calResult.profile)
                     ConfigStorage(ctx.appContext).saveCalibration(calResult.profile)
-                    BotStateStore.log("Tự nhận diện màn hình đánh: ${calResult.detectedItems.joinToString(", ")}", LogLevel.SUCCESS)
+                    BotStateStore.log("Tự nhận diện màn đánh: ${calResult.detectedItems.joinToString(", ")}", LogLevel.SUCCESS)
                 }
             }
 
             val latestCal = ctx.calibration
-            val loot = ctx.withFrame { frame ->
+            // Instant zero-extra-capture loot check when pre-parsed from scout frame; fallback OCR only if missing!
+            val loot = scoutAnalysis.preParsedLoot?.takeIf { it.isValid } ?: ctx.withFrame { frame ->
                 val primary = ctx.screenDetector.readEnemyLoot(frame, latestCal)
                 if (primary.isValid) {
                     primary
@@ -225,17 +230,16 @@ class HomeFarmEngine {
                     loot
                 } else {
                     BotStateStore.log("Đạt $maxNexts lượt Next không đạt ngưỡng — quay về nhà chính.", LogLevel.INFO)
-                    ctx.tap(latestCal.endBattleButton)
-                    ctx.sleep(1_400L)
+                    ctx.tap(latestCal.endBattleButton, delayAfter = false)
+                    ctx.sleep(900L)
                     null
                 }
             }
 
             BotStateStore.updateStats { it.copy(basesSkipped = it.basesSkipped + 1) }
-            // Tap exact live OCR-detected "Next" / "Tiếp" button when available, else latest calibrated point
             val nextTap = scoutAnalysis.suggestedTapPoint ?: latestCal.nextBaseButton
-            ctx.tap(nextTap)
-            ctx.sleep(1_350L)
+            ctx.tap(nextTap, delayAfter = false)
+            ctx.sleep(550L)
         }
         return null
     }
@@ -254,10 +258,10 @@ class HomeFarmEngine {
                 GameScreenState.BATTLE_SCOUT, GameScreenState.BATTLE_ACTIVE -> return analysis
                 GameScreenState.HOME_VILLAGE -> return null
                 GameScreenState.DISCONNECTED_DIALOG -> {
-                    analysis.suggestedTapPoint?.let { ctx.tap(it) }
+                    analysis.suggestedTapPoint?.let { ctx.tap(it, delayAfter = false) }
                     return null
                 }
-                else -> ctx.sleep(650L)
+                else -> ctx.sleep(260L)
             }
         }
         return null
@@ -281,8 +285,8 @@ class HomeFarmEngine {
 
             when (analysis?.state) {
                 GameScreenState.BATTLE_SUMMARY -> {
-                    ctx.tap(analysis.suggestedTapPoint ?: cal.returnHomeButton)
-                    ctx.sleep(1_800L)
+                    ctx.tap(analysis.suggestedTapPoint ?: cal.returnHomeButton, delayAfter = false)
+                    ctx.sleep(900L)
                     recordAttackSuccess(targetLoot)
                     dismissPostBattlePopups(ctx)
                     return
@@ -294,19 +298,19 @@ class HomeFarmEngine {
                 }
 
                 GameScreenState.DISCONNECTED_DIALOG -> {
-                    analysis.suggestedTapPoint?.let { ctx.tap(it) }
-                    ctx.sleep(3_000L)
+                    analysis.suggestedTapPoint?.let { ctx.tap(it, delayAfter = false) }
+                    ctx.sleep(2_500L)
                     return
                 }
 
                 else -> {
                     // Optional early surrender once all troop slots turned grayscale
-                    if (cfg.earlySurrenderWhenTroopsEmpty && elapsedSec >= 10) {
+                    if (cfg.earlySurrenderWhenTroopsEmpty && elapsedSec >= 8) {
                         val allEmpty = DeployStrategyEngine.areAllTroopSlotsEmpty(ctx)
                         if (allEmpty) {
                             val firstEmpty = emptyTroopsSinceMs ?: System.currentTimeMillis().also { emptyTroopsSinceMs = it }
                             if (System.currentTimeMillis() - firstEmpty >= cfg.earlySurrenderWaitSec * 1_000L) {
-                                BotStateStore.log("Đã hết quân sau ${cfg.earlySurrenderWaitSec}s — kết thúc sớm để đánh trận mới.", LogLevel.INFO)
+                                BotStateStore.log("Đã hết quân sau ${cfg.earlySurrenderWaitSec}s — kết thúc sớm đánh trận mới.", LogLevel.INFO)
                                 triggerSurrenderAndReturn(ctx)
                                 recordAttackSuccess(targetLoot)
                                 return
@@ -315,7 +319,7 @@ class HomeFarmEngine {
                             emptyTroopsSinceMs = null
                         }
                     }
-                    ctx.sleep(2_000L)
+                    ctx.sleep(1_000L)
                 }
             }
         }

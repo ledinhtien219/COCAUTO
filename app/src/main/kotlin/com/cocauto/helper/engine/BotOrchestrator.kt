@@ -75,7 +75,7 @@ class BotOrchestrator(
                 when (analysis.state) {
                     GameScreenState.LOADING, GameScreenState.SEARCHING_CLOUDS -> {
                         BotStateStore.setAction("Đang chờ game tải...", analysis.state)
-                        ctx.sleep(1_500L)
+                        ctx.sleep(700L)
                         continue
                     }
 
@@ -83,12 +83,12 @@ class BotOrchestrator(
                         if (ctx.config.safety.autoReloadOnDisconnect) {
                             BotStateStore.log("Phát hiện mất kết nối — tự động bấm Tải lại (Reload).", LogLevel.WARN)
                             BotStateStore.setAction("Khôi phục kết nối game...", GameScreenState.DISCONNECTED_DIALOG)
-                            ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.62f))
+                            ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.62f), delayAfter = false)
                             BotStateStore.updateStats { it.copy(reconnectRecoveries = it.reconnectRecoveries + 1) }
-                            ctx.sleep(6_000L)
+                            ctx.sleep(4_500L)
                         } else {
                             BotStateStore.setAction("Mất kết nối (tắt tự Reload)", GameScreenState.DISCONNECTED_DIALOG)
-                            ctx.sleep(3_000L)
+                            ctx.sleep(2_000L)
                         }
                         continue
                     }
@@ -98,8 +98,8 @@ class BotOrchestrator(
                         BotStateStore.log("Phát hiện nghỉ bắt buộc / thiết bị khác — tạm nghỉ $pauseMins phút.", LogLevel.WARN)
                         BotStateStore.setAction("Nghỉ an toàn $pauseMins phút...", GameScreenState.PERSONAL_BREAK)
                         ctx.sleep(pauseMins * 60_000L)
-                        ctx.tap(NormPoint(0.50f, 0.62f))
-                        ctx.sleep(4_000L)
+                        ctx.tap(NormPoint(0.50f, 0.62f), delayAfter = false)
+                        ctx.sleep(3_000L)
                         continue
                     }
 
@@ -116,25 +116,39 @@ class BotOrchestrator(
                     }
 
                     GameScreenState.BATTLE_SUMMARY -> {
-                        BotStateStore.setAction("Bấm Về nhà sau trận", GameScreenState.BATTLE_SUMMARY)
-                        ctx.tap(analysis.suggestedTapPoint ?: ctx.calibration.returnHomeButton)
-                        ctx.sleep(2_000L)
+                        BotStateStore.setAction("Bấm Về làng sau trận", GameScreenState.BATTLE_SUMMARY)
+                        ctx.tap(analysis.suggestedTapPoint ?: ctx.calibration.returnHomeButton, delayAfter = false)
+                        ctx.sleep(900L)
                         continue
                     }
 
                     GameScreenState.POPUP_DIALOG -> {
                         BotStateStore.setAction("Đóng hộp thoại thông báo", GameScreenState.POPUP_DIALOG)
-                        ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.72f))
-                        ctx.sleep(800L)
+                        ctx.tap(analysis.suggestedTapPoint ?: NormPoint(0.50f, 0.72f), delayAfter = false)
+                        ctx.sleep(420L)
                         continue
                     }
 
                     else -> Unit
                 }
 
-                // Step 2.5: Automatic UI self-calibration once per session so user never has to drag boxes manually
+                // Step 2.5: Instant zero-extra-capture UI auto-calibration directly from Step 2 OCR lines!
                 if (!autoCalibratedHomeThisSession && ctx.config.safety.autoCalibrateScreen) {
-                    runSilentAutoCalibration(ctx)
+                    if (analysis.fullLines.isNotEmpty()) {
+                        val (sw, sh) = ctx.bridgeManager.activeAdbBridge()?.lastCapturedPhysicalSize() ?: (2400 to 1080)
+                        val quickCal = AutoCalibrationEngine.applyDetectedOcr(ctx.calibration, analysis.fullLines, sw, sh)
+                        if (quickCal.hasDetections) {
+                            autoCalibratedHomeThisSession = true
+                            BotStateStore.updateCalibration(quickCal.profile)
+                            ConfigStorage(ctx.appContext).saveCalibration(quickCal.profile)
+                            BotStateStore.updateRuntime { it.copy(lastOcrTestSummary = quickCal.summaryText()) }
+                            BotStateStore.log(quickCal.summaryText(), LogLevel.SUCCESS)
+                        } else {
+                            runSilentAutoCalibration(ctx)
+                        }
+                    } else {
+                        runSilentAutoCalibration(ctx)
+                    }
                 }
 
                 // Step 3: Run mode-specific automation cycle
@@ -157,7 +171,7 @@ class BotOrchestrator(
                     }
                 }
 
-                ctx.sleep(1_200L)
+                ctx.sleep(350L)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
@@ -188,20 +202,17 @@ class BotOrchestrator(
     }
 
     private suspend fun executeHomeCycle(ctx: BotExecutionContext) {
-        // 1. Collect mines, collectors, drills & Loot Cart
+        // 1. Fast batched collector harvest (runs 1st cycle and every 3rd cycle)
         homeFarmEngine.collectHomeResources(ctx)
 
-        // 2. Check & run upgrades before attack (spend overflow resources first)
-        upgradeEngine.runUpgradeCycle(ctx)
+        // 2. Single-frame parallel snapshot (Resources + Fill% + Builders + Lab) shared across Upgrade & Full-Storage checks!
+        val snapshot = upgradeEngine.readFullHomeSnapshot(ctx)
+        val afterUpgrade = upgradeEngine.runUpgradeCycle(ctx, preSnapshot = snapshot) ?: snapshot
 
-        // 3. Check if Home Village storages are full (after trying to spend on upgrades/walls!)
-        val storageSnapshot = ctx.withFrame { frame ->
-            val res = ctx.screenDetector.readHomeResources(frame, ctx.calibration)
-            val fill = ctx.screenDetector.readStorageFillLevels(frame, ctx.calibration)
-            res to fill
-        }
-        if (storageSnapshot != null) {
-            val (homeRes, fill) = storageSnapshot
+        // 3. Check if Home Village storages are full (ZERO extra capture!)
+        if (afterUpgrade != null) {
+            val homeRes = afterUpgrade.resources
+            val fill = afterUpgrade.storageFill
             BotStateStore.updateStats {
                 it.copy(
                     lastHomeResources = homeRes,
@@ -233,10 +244,13 @@ class BotOrchestrator(
             }
         }
 
-        // 4. Find target base & attack
+        // 4. Find target base & attack rapidly
         homeFarmEngine.runAttackCycle(ctx)
 
-        // 5. Re-check upgrades right after loot comes in
-        upgradeEngine.runUpgradeCycle(ctx)
+        // 5. Re-check upgrades right after loot comes in ONLY if builders might be free (avoids wasting ~2s when 0/N busy!)
+        val lastBuilders = afterUpgrade?.builders
+        if (lastBuilders == null || !lastBuilders.isValid || lastBuilders.freeBuilders > 0) {
+            upgradeEngine.runUpgradeCycle(ctx)
+        }
     }
 }

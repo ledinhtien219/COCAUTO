@@ -36,7 +36,12 @@ class ShizukuAdbBridge(private val context: Context) : DeviceBridge {
     @Volatile
     private var shellService: IShizukuShellService? = null
 
+    @Volatile
+    private var lastPhysicalSize: Pair<Int, Int>? = null
+
     private var activeConnection: ServiceConnection? = null
+
+    override fun lastCapturedPhysicalSize(): Pair<Int, Int>? = lastPhysicalSize
 
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName(BuildConfig.APPLICATION_ID, ShizukuShellUserService::class.java.name),
@@ -110,17 +115,25 @@ class ShizukuAdbBridge(private val context: Context) : DeviceBridge {
 
     override suspend fun captureScreen(): Bitmap? = withContext(Dispatchers.IO) {
         val svc = ensureBound() ?: return@withContext null
+        // 1. Turbo raw RGBA pipe (~150ms vs ~735ms PNG!)
+        runCatching {
+            svc.captureRawPipe()?.let { pfd ->
+                val raw = ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() }
+                RawScreencapDecoder.decodeRawRgba(raw)?.let { decoded ->
+                    lastPhysicalSize = decoded.physicalWidth to decoded.physicalHeight
+                    return@withContext decoded.bitmap
+                }
+            }
+        }
+        // 2. Fallback PNG pipe with 2x downsample
         val pfd = runCatching { svc.capturePngPipe() }.getOrNull() ?: return@withContext null
         try {
             ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
                 val bytes = input.readBytes()
-                if (bytes.size < 100) return@withContext null
-                BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
-                )
+                RawScreencapDecoder.decodePngDownsampled(bytes)?.let { decoded ->
+                    lastPhysicalSize = decoded.physicalWidth to decoded.physicalHeight
+                    decoded.bitmap
+                }
             }
         } catch (_: Exception) {
             null
@@ -130,6 +143,13 @@ class ShizukuAdbBridge(private val context: Context) : DeviceBridge {
     override suspend fun tap(xPx: Int, yPx: Int, holdMs: Long): Boolean = withContext(Dispatchers.IO) {
         val svc = ensureBound() ?: return@withContext false
         runCatching { svc.tap(xPx, yPx, holdMs) }.getOrDefault(false)
+    }
+
+    override suspend fun executeTouchBatch(steps: List<TouchStep>): Boolean = withContext(Dispatchers.IO) {
+        if (steps.isEmpty()) return@withContext true
+        val svc = ensureBound() ?: return@withContext false
+        val spec = steps.joinToString(";") { it.encode() }
+        runCatching { svc.executeTouchBatch(spec) }.getOrDefault(false)
     }
 
     override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): Boolean = withContext(Dispatchers.IO) {

@@ -558,7 +558,9 @@ object ResourceParser {
             norm == "yes" ||
             norm == "co" ||
             norm.contains("dong y") ||
-            norm.contains("xac nhan")
+            norm.contains("xac nhan") ||
+            norm.contains("tiep tuc") ||
+            norm == "continue"
     }
 
     fun isHomeAttackButtonText(raw: String): Boolean {
@@ -577,6 +579,9 @@ object ResourceParser {
             norm.contains("welcome back") ||
             norm.contains("vang mat") ||
             norm.contains("nang cap da hoan tat") ||
+            norm.contains("kho chua tam thoi") ||
+            norm.contains("vat pham da duoc") ||
+            norm.contains("tiep tuc") ||
             norm.contains("claim") ||
             norm.contains("nhan thuong") ||
             norm.contains("okay") ||

@@ -11,6 +11,16 @@ import com.cocauto.helper.model.NormRect
 import com.cocauto.helper.vision.ImageAnalyzer
 import com.cocauto.helper.vision.ResourceParser
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+
+data class HomeStatusSnapshot(
+    val resources: HomeResources,
+    val storageFill: com.cocauto.helper.model.StorageFillLevels,
+    val builders: BuilderStatus,
+    val lab: BuilderStatus,
+)
+
 /**
  * Handles all Home Village automatic construction & upgrades with strict Builder-Free detection:
  * 1. Strictly reads free/total Builders ("0/2", "1/5") — NEVER opens Builder menu when 0 builders are free
@@ -21,26 +31,31 @@ import com.cocauto.helper.vision.ResourceParser
 class AutoUpgradeEngine {
     private var lastLabCheckAtMs: Long = 0L
 
-    suspend fun runUpgradeCycle(ctx: BotExecutionContext) {
+    suspend fun runUpgradeCycle(
+        ctx: BotExecutionContext,
+        preSnapshot: HomeStatusSnapshot? = null,
+    ): HomeStatusSnapshot? {
         val upgradeCfg = ctx.config.upgrade
         val wantsBuilderWork = upgradeCfg.autoUpgradeWalls ||
             upgradeCfg.autoUpgradeBuildings ||
             upgradeCfg.autoBuildNewBuildings
 
         if (!wantsBuilderWork && !upgradeCfg.autoUpgradeLab) {
-            return
+            return preSnapshot
         }
 
-        // Read Home Resources + strict Builder count (retry once if OCR missed mid-animation)
-        var snapshot = readHomeSnapshot(ctx) ?: return
-        if (!snapshot.second.isValid) {
-            ctx.sleep(280L)
-            snapshot = readHomeSnapshot(ctx) ?: snapshot
+        // Reuse pre-read Home snapshot (0 extra captures!) or read resources+builders+lab in 1 parallel frame
+        var snapshot = preSnapshot ?: readFullHomeSnapshot(ctx) ?: return null
+        if (!snapshot.builders.isValid) {
+            ctx.sleep(200L)
+            snapshot = readFullHomeSnapshot(ctx) ?: snapshot
         }
-        val (homeRes, builders) = snapshot
+        val homeRes = snapshot.resources
+        val builders = snapshot.builders
         BotStateStore.updateStats {
             it.copy(
                 lastHomeResources = homeRes,
+                lastStorageFill = snapshot.storageFill,
                 lastBuilderStatus = builders,
             )
         }
@@ -95,8 +110,33 @@ class AutoUpgradeEngine {
             val now = System.currentTimeMillis()
             if (now - lastLabCheckAtMs >= intervalMs) {
                 lastLabCheckAtMs = now
-                val freshHome = readHomeSnapshot(ctx)?.first ?: homeRes
-                runLaboratoryUpgrade(ctx, freshHome)
+                if (snapshot.lab.isValid && snapshot.lab.freeBuilders <= 0) {
+                    BotStateStore.log(
+                        "Phòng thí nghiệm (Lab) đang bận (${snapshot.lab.freeBuilders}/${snapshot.lab.totalBuilders}) — bỏ qua.",
+                        LogLevel.INFO,
+                    )
+                } else {
+                    val freshHome = readHomeSnapshot(ctx)?.first ?: homeRes
+                    runLaboratoryUpgrade(ctx, freshHome)
+                }
+            }
+        }
+        return snapshot
+    }
+
+    suspend fun readFullHomeSnapshot(ctx: BotExecutionContext): HomeStatusSnapshot? {
+        return ctx.withFrame { frame ->
+            coroutineScope {
+                val resDef = async { ctx.screenDetector.readHomeResources(frame, ctx.calibration) }
+                val bldDef = async { ctx.screenDetector.readBuilderStatus(frame, ctx.calibration) }
+                val labDef = async { ctx.screenDetector.readLabStatus(frame, ctx.calibration) }
+                val fill = ctx.screenDetector.readStorageFillLevels(frame, ctx.calibration)
+                HomeStatusSnapshot(
+                    resources = resDef.await(),
+                    storageFill = fill,
+                    builders = bldDef.await(),
+                    lab = labDef.await(),
+                )
             }
         }
     }

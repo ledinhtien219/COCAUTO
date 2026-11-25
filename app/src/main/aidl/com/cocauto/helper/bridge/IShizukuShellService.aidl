@@ -9,4 +9,6 @@ interface IShizukuShellService {
     boolean tap(int x, int y, long holdMs) = 3;
     boolean swipe(int x1, int y1, int x2, int y2, long durationMs) = 4;
     boolean pinchZoomOut(int width, int height) = 5;
+    boolean executeTouchBatch(String batchSpec) = 6;
+    ParcelFileDescriptor captureRawPipe() = 7;
 }

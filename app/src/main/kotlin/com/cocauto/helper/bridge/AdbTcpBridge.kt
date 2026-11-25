@@ -49,7 +49,12 @@ class AdbTcpBridge(
     private var maxPayload: Int = 256 * 1024
     private var connectedHostPort: String = ""
 
+    @Volatile
+    private var lastPhysicalSize: Pair<Int, Int>? = null
+
     private val keyPair: KeyPair by lazy { loadOrGenerateRsaKeyPair(context.applicationContext) }
+
+    override fun lastCapturedPhysicalSize(): Pair<Int, Int>? = lastPhysicalSize
 
     override suspend fun isConnected(): Boolean = mutex.withLock {
         val target = "${hostProvider().trim()}:${portProvider()}"
@@ -66,16 +71,22 @@ class AdbTcpBridge(
     }
 
     override suspend fun captureScreen(): Bitmap? = withContext(Dispatchers.IO) {
+        // 1. Turbo path: raw uncompressed RGBA_8888 `exec:screencap` (~155ms vs ~735ms PNG!) + 2x downsample
         runCatching {
-            // `exec:screencap -p` sends raw binary PNG bytes without PTY \r\n mangling!
+            val rawBytes = runStreamCommand("exec:screencap")
+            RawScreencapDecoder.decodeRawRgba(rawBytes)?.let { decoded ->
+                lastPhysicalSize = decoded.physicalWidth to decoded.physicalHeight
+                return@withContext decoded.bitmap
+            }
+        }
+        // 2. Fallback: PNG `exec:screencap -p` with 2x downsample
+        runCatching {
             val pngBytes = runStreamCommand("exec:screencap -p")
-            if (pngBytes.size < 100) return@runCatching null
-            BitmapFactory.decodeByteArray(
-                pngBytes,
-                0,
-                pngBytes.size,
-                BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
-            )
+            RawScreencapDecoder.decodePngDownsampled(pngBytes)?.let { decoded ->
+                lastPhysicalSize = decoded.physicalWidth to decoded.physicalHeight
+                return@withContext decoded.bitmap
+            }
+            null
         }.getOrNull()
     }
 
@@ -86,6 +97,31 @@ class AdbTcpBridge(
             "input tap $xPx $yPx"
         }
         runCatching { execShell(cmd); true }.getOrDefault(false)
+    }
+
+    override suspend fun executeTouchBatch(steps: List<TouchStep>): Boolean = withContext(Dispatchers.IO) {
+        if (steps.isEmpty()) return@withContext true
+        val spec = steps.joinToString(";") { it.encode() }
+        val ok = runCatching {
+            val apkPath = context.applicationContext.packageCodePath
+            val out = execShell(
+                "CLASSPATH='$apkPath' app_process / com.cocauto.helper.bridge.ShellPinchZoomMain batch '$spec'",
+            )
+            out.contains("BATCH_OK")
+        }.getOrDefault(false)
+        if (ok) return@withContext true
+
+        // Fallback to single shell script if app_process ever fails
+        val shellScript = buildString {
+            for (s in steps) {
+                if (s.holdMs > 75L) {
+                    append("input touchscreen swipe ${s.xPx} ${s.yPx} ${s.xPx} ${s.yPx} ${s.holdMs};")
+                } else {
+                    append("input tap ${s.xPx} ${s.yPx};")
+                }
+            }
+        }
+        runCatching { execShell(shellScript); true }.getOrDefault(false)
     }
 
     override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): Boolean = withContext(Dispatchers.IO) {
