@@ -33,18 +33,32 @@ class ConfigStorage(context: Context) {
     fun loadConfig(): BotConfig {
         return runCatching {
             if (configFile.exists()) {
-                val loaded = json.decodeFromString<BotConfig>(configFile.readText())
+                val raw = configFile.readText()
+                var loaded = json.decodeFromString<BotConfig>(raw)
+                var changed = false
                 if (loaded.update.updateSourceUrl.isBlank()) {
-                    val migrated = loaded.copy(
+                    loaded = loaded.copy(
                         update = loaded.update.copy(
                             updateSourceUrl = com.cocauto.helper.model.UpdateConfig.DEFAULT_UPDATE_SOURCE,
                         ),
                     )
-                    saveConfig(migrated)
-                    migrated
-                } else {
-                    loaded
+                    changed = true
                 }
+                // One-time migration from v2.0.x -> v2.1.0: switch old default to AUTO_ADB (Wi-Fi & 4G)
+                if (!raw.contains("\"autoConnectOnLaunch\"") &&
+                    loaded.bridge.mode != com.cocauto.helper.model.ControlBackendMode.ACCESSIBILITY_LEGACY
+                ) {
+                    loaded = loaded.copy(
+                        bridge = loaded.bridge.copy(
+                            mode = com.cocauto.helper.model.ControlBackendMode.AUTO_ADB,
+                            autoConnectOnLaunch = true,
+                            autoReconnectOnNetworkChange = true,
+                        ),
+                    )
+                    changed = true
+                }
+                if (changed) saveConfig(loaded)
+                loaded
             } else {
                 BotConfig()
             }

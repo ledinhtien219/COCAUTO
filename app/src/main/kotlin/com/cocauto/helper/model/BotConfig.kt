@@ -151,15 +151,18 @@ data class SessionSafetyConfig(
 
 @Serializable
 enum class ControlBackendMode(val label: String) {
+    AUTO_ADB("Tự động ADB (Wi-Fi & 4G)"),
+    LOCAL_ADB_TCP("ADB 127.0.0.1:5555 (4G/Wi-Fi)"),
     SHIZUKU_ADB("Shizuku (ADB trên máy)"),
-    LOCAL_ADB_TCP("ADB TCP (127.0.0.1:5555)"),
     PC_HTTP_ADB("ADB Cầu nối PC"),
     ACCESSIBILITY_LEGACY("Trợ năng (Cũ)"),
 }
 
 @Serializable
 data class BridgeConfig(
-    val mode: ControlBackendMode = ControlBackendMode.SHIZUKU_ADB,
+    val mode: ControlBackendMode = ControlBackendMode.AUTO_ADB,
+    val autoConnectOnLaunch: Boolean = true,
+    val autoReconnectOnNetworkChange: Boolean = true,
     val adbTcpHost: String = "127.0.0.1",
     val adbTcpPort: Int = 5555,
     val pcBridgeUrl: String = "http://127.0.0.1:8085",

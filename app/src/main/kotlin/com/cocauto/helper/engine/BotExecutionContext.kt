@@ -87,7 +87,7 @@ class BotExecutionContext(
         val holdMs = Random.nextLong(42L, 86L)
 
         val ok = if (isAdbBridgeMode()) {
-            val bridge = bridgeManager.activeAdbBridge() ?: return false
+            val bridge = bridgeManager.ensureConnected() ?: return false
             val (w, h) = lastFrameSize ?: bridge.getScreenSize()
             val (rawX, rawY) = point.toPixel(w, h)
             val jx = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
@@ -107,7 +107,7 @@ class BotExecutionContext(
     suspend fun swipe(from: NormPoint, to: NormPoint, durationMs: Long = 380L): Boolean {
         ensureRunning()
         val ok = if (isAdbBridgeMode()) {
-            val bridge = bridgeManager.activeAdbBridge() ?: return false
+            val bridge = bridgeManager.ensureConnected() ?: return false
             val (w, h) = lastFrameSize ?: bridge.getScreenSize()
             val (x1, y1) = from.toPixel(w, h)
             val (x2, y2) = to.toPixel(w, h)
@@ -128,7 +128,7 @@ class BotExecutionContext(
 
     suspend fun zoomOutCamera() {
         if (isAdbBridgeMode()) {
-            val bridge = bridgeManager.activeAdbBridge() ?: return
+            val bridge = bridgeManager.ensureConnected() ?: return
             val (w, h) = lastFrameSize ?: bridge.getScreenSize()
             repeat(2) {
                 ensureRunning()
@@ -147,7 +147,7 @@ class BotExecutionContext(
 
     suspend fun readForegroundPackage(): String {
         if (isAdbBridgeMode()) {
-            val pkg = bridgeManager.activeAdbBridge()?.getForegroundPackage().orEmpty()
+            val pkg = bridgeManager.ensureConnected()?.getForegroundPackage().orEmpty()
             if (pkg.isNotBlank()) {
                 BotStateStore.updateRuntime { it.copy(foregroundPackage = pkg) }
             }
@@ -175,6 +175,10 @@ class BotExecutionContext(
 
     private suspend fun captureFrameActiveSource(): Bitmap? {
         if (isAdbBridgeMode()) {
+            val bridge = bridgeManager.ensureConnected()
+            bridge?.captureScreen()?.let { return it }
+            // If capture failed (e.g. Wi-Fi -> 4G switched mid-run), re-run autoConnect once and retry
+            bridgeManager.autoConnect(reason = "phục hồi chụp màn hình", forceReconnect = true, logOnSuccess = true)
             return bridgeManager.activeAdbBridge()?.captureScreen()
         }
         if (captureManager.isReady) {

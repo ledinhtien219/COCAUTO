@@ -60,10 +60,8 @@ class AdbTcpBridge(
         runCatching {
             val uid = execShell("id -u").trim()
             val (w, h) = getScreenSize()
-            val target = "${hostProvider().trim()}:${portProvider()}"
-            val msg = "Đã kết nối ADB TCP $target (uid=$uid, ${w}x${h})"
-            BotStateStore.log(msg, LogLevel.SUCCESS)
-            msg
+            val target = "${hostProvider().trim().ifBlank { "127.0.0.1" }}:${portProvider()}"
+            "ADB TCP $target (uid=$uid, ${w}x${h})"
         }
     }
 
@@ -127,6 +125,21 @@ class AdbTcpBridge(
     }
 
     private suspend fun runStreamCommand(serviceSpec: String): ByteArray = mutex.withLock {
+        val wasReused = socket?.isConnected == true && socket?.isClosed == false
+        return@withLock try {
+            runStreamCommandOnceLocked(serviceSpec)
+        } catch (firstError: Exception) {
+            closeSocketLocked()
+            if (wasReused) {
+                // Socket went stale (e.g. idle timeout or Wi-Fi <-> 4G switch) -> transparent single retry
+                runStreamCommandOnceLocked(serviceSpec)
+            } else {
+                throw firstError
+            }
+        }
+    }
+
+    private fun runStreamCommandOnceLocked(serviceSpec: String): ByteArray {
         ensureConnectedLocked()
         val din = input ?: error("ADB input stream closed")
         val dout = output ?: error("ADB output stream closed")
@@ -157,7 +170,7 @@ class AdbTcpBridge(
                     }
 
                     CMD_CLSE -> {
-                        if (pkt.arg1 == localId || pkt.arg0 == remoteId) {
+                        if (pkt.arg1 == localId || (remoteId != 0 && pkt.arg0 == remoteId)) {
                             sendPacket(dout, CMD_CLSE, localId, pkt.arg0, ByteArray(0))
                             break
                         }
@@ -168,7 +181,7 @@ class AdbTcpBridge(
             closeSocketLocked()
             throw e
         }
-        result.toByteArray()
+        return result.toByteArray()
     }
 
     private fun ensureConnectedLocked() {
@@ -181,16 +194,18 @@ class AdbTcpBridge(
         }
         closeSocketLocked()
 
+        val isLoopback = host == "127.0.0.1" || host.equals("localhost", ignoreCase = true) || host == "::1"
         val sock = Socket()
-        sock.connect(InetSocketAddress(host, port), 4_000)
+        sock.connect(InetSocketAddress(host, port), if (isLoopback) 1_500 else 3_000)
         sock.soTimeout = 15_000
         sock.tcpNoDelay = true
+        sock.keepAlive = true
 
         val din = DataInputStream(sock.getInputStream())
         val dout = DataOutputStream(sock.getOutputStream())
 
-        // 1. Send CNXN handshake
-        val banner = "host::features=shell_v2,cmd,stat_v2\u0000".toByteArray(Charsets.UTF_8)
+        // 1. Send CNXN handshake (avoid advertising shell_v2 so raw shell: stream works cleanly)
+        val banner = "host::features=cmd,stat_v2\u0000".toByteArray(Charsets.UTF_8)
         sendPacket(dout, CMD_CNXN, ADB_VERSION, 256 * 1024, banner)
 
         var sentSignature = false

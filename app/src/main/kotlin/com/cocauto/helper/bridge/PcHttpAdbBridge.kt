@@ -64,8 +64,7 @@ class PcHttpAdbBridge(
                 cachedSize = health.width to health.height
             }
             lastHealthy = true
-            val msg = "PC ADB Bridge sẵn sàng (${health.serial}, ${health.width}x${health.height})"
-            BotStateStore.log(msg, LogLevel.SUCCESS)
+            val msg = "PC ADB Bridge (${health.serial}, ${health.width}x${health.height})"
             msg
         }.onFailure {
             lastHealthy = false
@@ -145,8 +144,8 @@ class PcHttpAdbBridge(
 
     private fun httpGetBytes(urlStr: String): ByteArray {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 4_000
-            readTimeout = 10_000
+            connectTimeout = 1_500
+            readTimeout = 8_000
             requestMethod = "GET"
         }
         return try {

@@ -75,7 +75,7 @@ class BotForegroundService : Service() {
         instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         configStorage = ConfigStorage(applicationContext)
-        bridgeManager = DeviceBridgeManager(applicationContext)
+        bridgeManager = DeviceBridgeManager.getInstance(applicationContext)
         captureManager = ScreenCaptureManager(applicationContext)
         ocrEngine = OcrEngine()
         screenDetector = ScreenStateDetector(ocrEngine)
@@ -322,7 +322,7 @@ class BotForegroundService : Service() {
         botJob = serviceScope.launch {
             try {
                 if (backendMode != ControlBackendMode.ACCESSIBILITY_LEGACY) {
-                    val check = bridgeManager.testActiveBridge()
+                    val check = bridgeManager.autoConnect(reason = "bắt đầu auto", forceReconnect = false)
                     if (check.isFailure) {
                         BotStateStore.log(
                             "Không kết nối được ${backendMode.label}: ${check.exceptionOrNull()?.message}",
@@ -363,7 +363,7 @@ class BotForegroundService : Service() {
     }
 
     private suspend fun captureDiagnosticFrame(): Bitmap? {
-        val adbBridge = bridgeManager.activeAdbBridge()
+        val adbBridge = bridgeManager.ensureConnected()
         if (adbBridge != null) {
             adbBridge.captureScreen()?.let { return it }
         }
@@ -640,15 +640,14 @@ class BotForegroundService : Service() {
             }
             val appCtx = context.applicationContext
             CoroutineScope(Dispatchers.Default).launch {
-                val tempBridge = DeviceBridgeManager(appCtx)
-                val frame = tempBridge.activeAdbBridge()?.captureScreen()
+                val sharedBridge = DeviceBridgeManager.getInstance(appCtx)
+                val frame = sharedBridge.ensureConnected()?.captureScreen()
                     ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         CocAccessibilityService.instance?.takeScreenshotBitmap()
                     } else {
                         null
                     }
                 if (frame == null) {
-                    tempBridge.disconnectAll()
                     onResult(null)
                     return@launch
                 }
@@ -665,7 +664,6 @@ class BotForegroundService : Service() {
                 } finally {
                     if (!frame.isRecycled) frame.recycle()
                     ocr.close()
-                    tempBridge.disconnectAll()
                 }
             }
         }
@@ -678,22 +676,22 @@ class BotForegroundService : Service() {
             }
             val appCtx = context.applicationContext
             CoroutineScope(Dispatchers.Default).launch {
-                val tempBridge = DeviceBridgeManager(appCtx)
-                val frame = tempBridge.activeAdbBridge()?.captureScreen()
+                val sharedBridge = DeviceBridgeManager.getInstance(appCtx)
+                val activeBridge = sharedBridge.ensureConnected()
+                val frame = activeBridge?.captureScreen()
                     ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         CocAccessibilityService.instance?.takeScreenshotBitmap()
                     } else {
                         null
                     }
                 if (frame == null) {
-                    tempBridge.disconnectAll()
-                    onResult("Không chụp được ảnh. Hãy kết nối ADB Cầu nối (Shizuku / ADB TCP / PC Bridge) trước!")
+                    onResult("Không chụp được ảnh. Hãy kiểm tra kết nối ADB (127.0.0.1:5555 / Shizuku / PC Bridge)!")
                     return@launch
                 }
                 val ocr = OcrEngine()
                 val detector = ScreenStateDetector(ocr)
                 try {
-                    val fg = tempBridge.activeAdbBridge()?.getForegroundPackage().orEmpty()
+                    val fg = activeBridge?.getForegroundPackage().orEmpty()
                         .ifBlank { BotStateStore.runtime.value.foregroundPackage }
                     val state = detector.analyzeScreen(frame, profile, fg)
                     val homeRes = detector.readHomeResources(frame, profile)
@@ -707,7 +705,6 @@ class BotForegroundService : Service() {
                 } finally {
                     if (!frame.isRecycled) frame.recycle()
                     ocr.close()
-                    tempBridge.disconnectAll()
                 }
             }
         }

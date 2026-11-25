@@ -2,7 +2,12 @@ package com.cocauto.helper
 
 import com.cocauto.helper.bridge.AdbRsaCrypto
 import com.cocauto.helper.bridge.AdbShellOutputParser
+import com.cocauto.helper.bridge.BridgeAutoConnectPlanner
+import com.cocauto.helper.model.BotConfig
+import com.cocauto.helper.model.ControlBackendMode
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -47,5 +52,51 @@ class AdbBridgeParserAndCryptoTest {
         val fakeToken = ByteArray(20) { it.toByte() }
         val sig = AdbRsaCrypto.signToken(pair.private, fakeToken)
         assertEquals(256, sig.size)
+    }
+
+    @Test
+    fun autoConnectPlanner_prioritizes4gSafeLocalTcpAndFallsBackToShizukuAndPc() {
+        val defaultPlan = BridgeAutoConnectPlanner.planCandidates(ControlBackendMode.AUTO_ADB)
+        assertEquals(
+            listOf(
+                ControlBackendMode.LOCAL_ADB_TCP,
+                ControlBackendMode.SHIZUKU_ADB,
+                ControlBackendMode.PC_HTTP_ADB,
+            ),
+            defaultPlan,
+        )
+
+        // When Shizuku was last working and still granted, keep Shizuku first and Local TCP as immediate 4G failover
+        val stickyShizukuPlan = BridgeAutoConnectPlanner.planCandidates(
+            mode = ControlBackendMode.AUTO_ADB,
+            lastWorkingMode = ControlBackendMode.SHIZUKU_ADB,
+            shizukuRunningAndGranted = true,
+        )
+        assertEquals(
+            listOf(
+                ControlBackendMode.SHIZUKU_ADB,
+                ControlBackendMode.LOCAL_ADB_TCP,
+                ControlBackendMode.PC_HTTP_ADB,
+            ),
+            stickyShizukuPlan,
+        )
+
+        // Explicit mode tries only that mode; legacy returns empty ADB list
+        assertEquals(listOf(ControlBackendMode.LOCAL_ADB_TCP), BridgeAutoConnectPlanner.planCandidates(ControlBackendMode.LOCAL_ADB_TCP))
+        assertTrue(BridgeAutoConnectPlanner.planCandidates(ControlBackendMode.ACCESSIBILITY_LEGACY).isEmpty())
+    }
+
+    @Test
+    fun bridgeConfig_defaultsToAutoAdbAndRemainsBackwardCompatibleWithSavedJson() {
+        val fresh = BotConfig()
+        assertEquals(ControlBackendMode.AUTO_ADB, fresh.bridge.mode)
+        assertTrue(fresh.bridge.autoConnectOnLaunch)
+        assertTrue(fresh.bridge.autoReconnectOnNetworkChange)
+
+        val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+        val oldV200Json = """{"bridge":{"mode":"SHIZUKU_ADB","adbTcpHost":"127.0.0.1","adbTcpPort":5555}}"""
+        val decoded = json.decodeFromString<BotConfig>(oldV200Json)
+        assertEquals(ControlBackendMode.SHIZUKU_ADB, decoded.bridge.mode)
+        assertTrue(decoded.bridge.autoConnectOnLaunch)
     }
 }

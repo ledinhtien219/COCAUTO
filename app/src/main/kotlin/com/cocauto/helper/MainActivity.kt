@@ -76,12 +76,21 @@ class MainActivity : ComponentActivity() {
     private var overlayGranted by mutableStateOf(false)
     private var shizukuRunning by mutableStateOf(false)
     private var shizukuGranted by mutableStateOf(false)
+    private var hasAutoRequestedShizuku = false
 
     private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {
         runOnUiThread {
             refreshSystemPermissionFlags()
-            if (BotStateStore.config.value.bridge.mode == ControlBackendMode.SHIZUKU_ADB && shizukuGranted) {
-                viewModel.testActiveBridge()
+            val cfg = BotStateStore.config.value.bridge
+            if (cfg.autoConnectOnLaunch &&
+                (cfg.mode == ControlBackendMode.AUTO_ADB || cfg.mode == ControlBackendMode.SHIZUKU_ADB)
+            ) {
+                if (shizukuGranted) {
+                    viewModel.autoConnectBridge(reason = "Shizuku sẵn sàng", forceReconnect = false)
+                } else if (shizukuRunning && !BotStateStore.runtime.value.bridgeConnected && !hasAutoRequestedShizuku && cfg.mode == ControlBackendMode.SHIZUKU_ADB) {
+                    hasAutoRequestedShizuku = true
+                    viewModel.requestShizukuPermission()
+                }
             }
         }
     }
@@ -89,8 +98,14 @@ class MainActivity : ComponentActivity() {
     private val shizukuBinderDeadListener = Shizuku.OnBinderDeadListener {
         runOnUiThread {
             refreshSystemPermissionFlags()
-            BotStateStore.updateRuntime {
-                it.copy(bridgeConnected = false, bridgeStatusText = "Shizuku binder đã ngắt kết nối")
+            val cfg = BotStateStore.config.value.bridge
+            if (cfg.mode == ControlBackendMode.AUTO_ADB) {
+                // Seamlessly fail over to 127.0.0.1:5555 (works on 4G without Wi-Fi!) if Shizuku stops
+                viewModel.autoConnectBridge(reason = "Shizuku ngắt — chuyển dự phòng ADB 4G", forceReconnect = true)
+            } else if (cfg.mode == ControlBackendMode.SHIZUKU_ADB) {
+                BotStateStore.updateRuntime {
+                    it.copy(bridgeConnected = false, bridgeStatusText = "Shizuku binder đã ngắt kết nối")
+                }
             }
         }
     }
@@ -100,7 +115,7 @@ class MainActivity : ComponentActivity() {
             refreshSystemPermissionFlags()
             if (grantResult == PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "Đã cấp quyền Shizuku ADB!", Toast.LENGTH_SHORT).show()
-                viewModel.testActiveBridge()
+                viewModel.autoConnectBridge(reason = "đã cấp quyền Shizuku", forceReconnect = true)
             } else {
                 Toast.makeText(this, "Bạn đã từ chối quyền Shizuku.", Toast.LENGTH_SHORT).show()
             }
@@ -172,8 +187,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshSystemPermissionFlags()
-        if (BotStateStore.config.value.bridge.mode == ControlBackendMode.SHIZUKU_ADB && shizukuGranted) {
-            viewModel.testActiveBridge()
+        val cfg = BotStateStore.config.value.bridge
+        if (cfg.autoConnectOnLaunch && cfg.mode != ControlBackendMode.ACCESSIBILITY_LEGACY) {
+            viewModel.autoConnectBridge(
+                reason = "mở app",
+                forceReconnect = !BotStateStore.runtime.value.bridgeConnected,
+            )
         }
     }
 
@@ -201,6 +220,7 @@ class MainActivity : ComponentActivity() {
         val captureReady = runtime.mediaProjectionReady ||
             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && runtime.accessibilityConnected)
         val bridgeReady = when (config.bridge.mode) {
+            ControlBackendMode.AUTO_ADB -> runtime.bridgeConnected || (shizukuRunning && shizukuGranted)
             ControlBackendMode.SHIZUKU_ADB -> runtime.bridgeConnected || (shizukuRunning && shizukuGranted)
             ControlBackendMode.LOCAL_ADB_TCP, ControlBackendMode.PC_HTTP_ADB -> runtime.bridgeConnected
             ControlBackendMode.ACCESSIBILITY_LEGACY -> accessibilityReady && captureReady
@@ -289,6 +309,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
+                        onBridgeModeChanged = { newMode ->
+                            viewModel.updateConfig { it.copy(bridge = it.bridge.copy(mode = newMode)) }
+                            if (newMode != ControlBackendMode.ACCESSIBILITY_LEGACY) {
+                                viewModel.autoConnectBridge(reason = "đổi chế độ ${newMode.label}", forceReconnect = true)
+                            }
+                        },
                         onRequestShizuku = { viewModel.requestShizukuPermission() },
                         onOpenShizukuApp = { openShizukuAppOrStore() },
                         onRequestOverlayPermission = { openOverlayPermissionSettings() },
@@ -363,6 +389,9 @@ class MainActivity : ComponentActivity() {
                     viewModel.requestShizukuPermission()
                     return
                 }
+            } else if (mode == ControlBackendMode.AUTO_ADB && !perms.bridgeReady && perms.shizukuRunning && !perms.shizukuGranted) {
+                viewModel.requestShizukuPermission()
+                return
             }
             if (!perms.overlayGranted) {
                 Toast.makeText(this, "Khuyên bật 'Hiển thị trên ứng dụng khác' để hiện icon nổi!", Toast.LENGTH_SHORT).show()

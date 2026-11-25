@@ -104,9 +104,7 @@ class ShizukuAdbBridge(private val context: Context) : DeviceBridge {
             val svc = ensureBound() ?: error("Không bind được Shizuku UserService.")
             val uid = svc.execCommand("id -u").trim()
             val (w, h) = getScreenSize()
-            val msg = "Shizuku ADB sẵn sàng (uid=$uid, ${w}x${h})"
-            BotStateStore.log(msg, LogLevel.SUCCESS)
-            msg
+            "Shizuku ADB (uid=$uid, ${w}x${h})"
         }
     }
 

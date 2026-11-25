@@ -49,6 +49,7 @@ import com.cocauto.helper.model.BotRuntimeSnapshot
 import com.cocauto.helper.model.ControlBackendMode
 import com.cocauto.helper.ui.components.IntNumberField
 import com.cocauto.helper.ui.components.SectionCard
+import com.cocauto.helper.ui.components.SettingSwitchRow
 import com.cocauto.helper.ui.components.SingleChoiceChipRow
 import com.cocauto.helper.ui.components.StatTile
 import com.cocauto.helper.ui.theme.ClashCrimson
@@ -85,6 +86,7 @@ fun DashboardTab(
     onToggleFloatingIcon: () -> Unit,
     onOpenCalibrationInGame: () -> Unit,
     onTestBridge: () -> Unit,
+    onBridgeModeChanged: (ControlBackendMode) -> Unit,
     onRequestShizuku: () -> Unit,
     onOpenShizukuApp: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
@@ -222,32 +224,97 @@ fun DashboardTab(
             }
         }
 
-        // 1. ADB Bridge Control Backend Selector (NO AccessibilityService needed!)
+        // 1. ADB Bridge Control Backend Selector (NO AccessibilityService needed — Wi-Fi & 4G ready!)
         SectionCard(
-            title = "Cầu nối ADB (Không dùng Trợ năng)",
-            subtitle = "Chụp màn hình & chạm trực tiếp bằng quyền ADB shell — mượt, không bị chặn Trợ năng, không hỏi quay màn hình",
+            title = "Cầu nối ADB Tự động (Wi-Fi & 4G)",
+            subtitle = "Tự động kết nối ADB ngay khi mở app — chạy mượt trên cả Wi-Fi lẫn chỉ dùng 4G/5G, không cần Trợ năng",
         ) {
             SingleChoiceChipRow(
                 options = ControlBackendMode.entries.map { it to it.label },
                 selected = config.bridge.mode,
-                onSelect = { m ->
-                    onUpdateConfig { it.copy(bridge = it.bridge.copy(mode = m)) }
-                },
+                onSelect = onBridgeModeChanged,
             )
 
             Spacer(modifier = Modifier.height(8.dp))
+            val netSuffix = if (runtime.networkTypeLabel.isNotBlank() && !runtime.bridgeStatusText.contains(runtime.networkTypeLabel)) {
+                " [${runtime.networkTypeLabel}]"
+            } else {
+                ""
+            }
             Text(
-                text = if (permissions.bridgeReady) "● ${runtime.bridgeStatusText.ifBlank { "ADB cầu nối sẵn sàng" }}" else "● ${runtime.bridgeStatusText}",
+                text = if (permissions.bridgeReady) {
+                    "● ${runtime.bridgeStatusText.ifBlank { "ADB cầu nối sẵn sàng" }}$netSuffix"
+                } else {
+                    "● ${runtime.bridgeStatusText}$netSuffix"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = if (permissions.bridgeReady) ClashEmerald else ClashGold,
             )
 
+            if (isAdbMode) {
+                Spacer(modifier = Modifier.height(4.dp))
+                SettingSwitchRow(
+                    title = "Tự kết nối ADB ngay khi mở app",
+                    subtitle = "Hoạt động cả khi có Wi-Fi và khi tắt Wi-Fi chỉ dùng 4G/5G",
+                    checked = config.bridge.autoConnectOnLaunch,
+                    onCheckedChange = { v ->
+                        onUpdateConfig { it.copy(bridge = it.bridge.copy(autoConnectOnLaunch = v)) }
+                    },
+                )
+                SettingSwitchRow(
+                    title = "Tự nối lại khi chuyển mạng Wi-Fi ↔ 4G",
+                    subtitle = "Tự chuyển dự phòng sang ADB cục bộ 127.0.0.1:5555 nếu đổi mạng",
+                    checked = config.bridge.autoReconnectOnNetworkChange,
+                    onCheckedChange = { v ->
+                        onUpdateConfig { it.copy(bridge = it.bridge.copy(autoReconnectOnNetworkChange = v)) }
+                    },
+                )
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
             when (config.bridge.mode) {
+                ControlBackendMode.AUTO_ADB -> {
+                    Text(
+                        text = "Tự dò theo thứ tự: ADB cục bộ 127.0.0.1:5555 (chạy cả 4G không cần Wi-Fi) → Shizuku (Binder nội bộ, chạy cả 4G) → PC ADB Bridge.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onTestBridge,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Tự kết nối ngay", fontWeight = FontWeight.Bold)
+                        }
+                        if (permissions.shizukuRunning && !permissions.shizukuGranted) {
+                            OutlinedButton(
+                                onClick = onRequestShizuku,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Cable, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Cấp quyền Shizuku")
+                            }
+                        } else if (!permissions.bridgeReady) {
+                            OutlinedButton(
+                                onClick = onOpenShizukuApp,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Cable, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Mở Shizuku")
+                            }
+                        }
+                    }
+                }
+
                 ControlBackendMode.SHIZUKU_ADB -> {
                     Text(
-                        text = "Chạy độc lập 100% trên điện thoại: Cài app Shizuku → bật Gỡ lỗi không dây trong Shizuku → bấm 'Cấp quyền Shizuku'.",
+                        text = "Chạy độc lập 100% qua Binder cục bộ (dùng được cả 4G sau khi đã khởi động Shizuku): Mở Shizuku → bấm 'Cấp quyền Shizuku'.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
@@ -276,7 +343,7 @@ fun DashboardTab(
 
                 ControlBackendMode.LOCAL_ADB_TCP -> {
                     Text(
-                        text = "Cắm cáp vào PC 1 lần chạy 'adb tcpip 5555' rồi rút dây — app kết nối thẳng ADB 127.0.0.1:5555 không cần cài thêm Shizuku.",
+                        text = "Kết nối thẳng 127.0.0.1:5555 (chạy 100% khi tắt Wi-Fi chỉ dùng 4G/5G). Chạy 1 lần scripts\\enable-adb-4g.bat hoặc 'adb tcpip 5555' rồi rút cáp.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
