@@ -1,8 +1,8 @@
 {
-  "versionCode": 8,
-  "versionName": "1.4.2",
-  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.4.2.apk",
-  "changelog": "- Sửa lệch khung ~4.5% do lỗ đục camera (Display Cutout)\n- Tự tách riêng nút Thợ xây (0/2) và Lab (1/1), nâng cấp đi farm OCR & preset theo cấp Nhà Chính (TH 3–6, TH 7–9, TH 10–12, TH 13+)\n- Khóa ký cố định & GitHub Actions tự phát hành APK chuẩn",
+  "versionCode": 9,
+  "versionName": "1.5.0",
+  "apkUrl": "https://github.com/ledinhtien219/COCAUTO/releases/latest/download/CoC-Auto-v1.5.0.apk",
+  "changelog": "- Sửa triệt để lỗi cài xong vẫn báo tải lại bản mới (đọc Build/versionCode chính xác + lưu lịch sử bản đã cài)\n- Nhận dạng Thợ xây nghiêm ngặt (tách riêng 0/2 khỏi Lab 1/1): chỉ nâng cấp & xây công trình mới khi có Thợ xây rảnh\n- Hỗ trợ tự đặt xây công trình mới (tự tìm dấu tích xanh ✓ xác nhận)",
   "sha256": "",
   "mandatory": false
 }

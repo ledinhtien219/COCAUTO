@@ -103,5 +103,32 @@ class AppUpdaterParserTest {
 
         val olderSemVerGithub = UpdateReleaseInfo(versionCode = 0, versionName = "1.1.9", apkUrl = "x.apk")
         assertFalse(UpdateManifestParser.isNewerVersion(olderSemVerGithub, 3, "1.2.0"))
+
+        // Missing-dot typo guard: tag "1.41" must NOT endlessly re-trigger update when installed is "1.4.1"
+        val missingDotTypo = UpdateReleaseInfo(versionCode = 0, versionName = "1.41", apkUrl = "x.apk")
+        assertFalse(UpdateManifestParser.isNewerVersion(missingDotTypo, 7, "1.4.1"))
+
+        // GitHub Release body containing "Build: 9" extracts exact versionCode=9
+        val ghBodyWithBuild = """
+            {
+              "tag_name": "v1.5.0",
+              "name": "CoC Auto v1.5.0",
+              "body": "Bản phát hành tự động\n- Build: 9\n- SHA-256: `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`",
+              "assets": [
+                {
+                  "name": "CoC-Auto-v1.5.0.apk",
+                  "browser_download_url": "https://github.com/u/r/releases/download/v1.5.0/CoC-Auto-v1.5.0.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = UpdateManifestParser.parseResponse(
+            ghBodyWithBuild,
+            "https://api.github.com/repos/u/r/releases/latest",
+        ).getOrThrow()
+        assertEquals(9, parsed.versionCode)
+        assertEquals("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", parsed.sha256)
+        assertFalse(UpdateManifestParser.isNewerVersion(parsed, 9, "1.5.0"))
+        assertTrue(UpdateManifestParser.isNewerVersion(parsed, 8, "1.4.2"))
     }
 }

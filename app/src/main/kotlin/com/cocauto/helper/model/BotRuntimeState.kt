@@ -83,6 +83,7 @@ data class UpgradeCandidate(
     val currency: CurrencyType,
     val tapPoint: NormPoint,
     val isWall: Boolean = false,
+    val isNewBuilding: Boolean = false,
 )
 
 data class BotLogEntry(
@@ -104,6 +105,7 @@ data class SessionStats(
     val estimatedGoldLooted: Long = 0L,
     val estimatedElixirLooted: Long = 0L,
     val estimatedDarkElixirLooted: Long = 0L,
+    val buildingsBuilt: Int = 0,
     val buildingsUpgraded: Int = 0,
     val wallsUpgraded: Int = 0,
     val labUpgradesStarted: Int = 0,

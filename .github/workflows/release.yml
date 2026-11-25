@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tên phiên bản phát hành (vd: v1.2.1)'
+        description: 'Tên phiên bản phát hành (vd: v1.5.0)'
         required: true
-        default: 'v1.2.1'
+        default: 'v1.5.0'
 
 permissions:
   contents: write
@@ -28,11 +28,11 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+      - name: Accept Android SDK licenses & install Android 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -46,10 +46,12 @@ jobs:
         id: pkg
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -n 1)
           APK_NAME="CoC-Auto-${TAG}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
           SHA256=$(sha256sum "$APK_NAME" | awk '{print $1}')
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
@@ -61,6 +63,7 @@ jobs:
           generate_release_notes: true
           body: |
             Bản phát hành tự động **CoC Auto ${{ steps.pkg.outputs.tag }}**
+            - Build: ${{ steps.pkg.outputs.version_code }}
             - Tệp APK: `${{ steps.pkg.outputs.apk_name }}`
             - SHA-256: `${{ steps.pkg.outputs.sha256 }}`
           files: |

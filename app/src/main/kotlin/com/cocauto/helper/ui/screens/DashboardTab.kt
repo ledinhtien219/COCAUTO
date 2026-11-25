@@ -363,7 +363,7 @@ fun DashboardTab(
             }
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatTile("Công trình nâng", "${s.buildingsUpgraded}", ClashGold, Modifier.weight(1f))
+                StatTile("Xây mới / Nâng", "${s.buildingsBuilt}/${s.buildingsUpgraded}", ClashGold, Modifier.weight(1f))
                 StatTile("Tường nâng", "${s.wallsUpgraded}", ClashEmerald, Modifier.weight(1f))
                 StatTile("Lab nâng", "${s.labUpgradesStarted}", ClashElixir, Modifier.weight(1f))
             }

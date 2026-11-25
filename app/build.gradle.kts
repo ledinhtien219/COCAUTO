@@ -13,8 +13,8 @@ android {
     applicationId = "com.cocauto.helper"
     minSdk = 26
     targetSdk = 35
-    versionCode = 7
-    versionName = "1.4.1"
+    versionCode = 9
+    versionName = "1.5.0"
   }
 
   signingConfigs {

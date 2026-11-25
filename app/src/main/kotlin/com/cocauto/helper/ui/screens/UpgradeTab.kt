@@ -1,5 +1,6 @@
 package com.cocauto.helper.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -12,11 +13,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -32,8 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cocauto.helper.model.BotConfig
+import com.cocauto.helper.model.BuilderStatus
 import com.cocauto.helper.model.UpgradePriorityOrder
 import com.cocauto.helper.model.WallCurrencyMode
 import com.cocauto.helper.ui.components.IntNumberField
@@ -42,6 +49,7 @@ import com.cocauto.helper.ui.components.SectionCard
 import com.cocauto.helper.ui.components.SettingSwitchRow
 import com.cocauto.helper.ui.components.SingleChoiceChipRow
 import com.cocauto.helper.ui.theme.ClashCrimson
+import com.cocauto.helper.ui.theme.ClashEmerald
 import com.cocauto.helper.ui.theme.ClashGold
 import com.cocauto.helper.ui.theme.TextSecondary
 
@@ -64,6 +72,7 @@ private val COMMON_SKIP_BUILDING_PRESETS = listOf(
 @Composable
 fun UpgradeTab(
     config: BotConfig,
+    builderStatus: BuilderStatus,
     onUpdateConfig: ((BotConfig) -> BotConfig) -> Unit,
 ) {
     val up = config.upgrade
@@ -77,6 +86,35 @@ fun UpgradeTab(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // 0. Live Builder Recognition Status Card
+        val hasFreeBuilder = builderStatus.isValid && builderStatus.freeBuilders > 0
+        val statusColor = when {
+            !builderStatus.isValid -> TextSecondary
+            hasFreeBuilder -> ClashEmerald
+            else -> ClashGold
+        }
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (hasFreeBuilder) Color(0xFF102A18) else Color(0xFF1F242D),
+            ),
+            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = when {
+                        !builderStatus.isValid -> "Nhận dạng Thợ xây: Chưa quét được (sẽ tự đọc khi vào Nhà Chính)"
+                        hasFreeBuilder -> "Thợ xây: ${builderStatus.freeBuilders}/${builderStatus.totalBuilders} đang RẢNH — Sẵn sàng nâng & xây!"
+                        else -> "Thợ xây: ${builderStatus.freeBuilders}/${builderStatus.totalBuilders} đang BẬN — Khóa menu nâng & xây"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor,
+                )
+            }
+        }
+
         // 1. Minimum Resource Reserves
         SectionCard(
             title = "Ngưỡng tài nguyên tối thiểu giữ lại",
@@ -104,13 +142,32 @@ fun UpgradeTab(
             )
         }
 
-        // 2. Builder Suggested Building Upgrades
+        // 2. Builder Suggested Building Upgrades & New Construction
         SectionCard(
-            title = "Tự nâng công trình (Gợi ý Thợ Xây)",
-            subtitle = "Mở menu gợi ý của Thợ xây, đọc tên & giá bằng OCR rồi tự nâng",
+            title = "Nhận dạng Thợ xây — Tự nâng cấp & Xây mới",
+            subtitle = "Đọc chính xác số Thợ xây (tách riêng khỏi Lab) — chỉ mở menu nâng cấp & đặt xây mới khi có Thợ rảnh",
         ) {
             SettingSwitchRow(
-                title = "Bật tự nâng công trình khi có Thợ rảnh",
+                title = "Chỉ nâng & xây khi nhận diện có Thợ xây rảnh (≥ 1)",
+                subtitle = "Khi 0/N (bận hết), bot bỏ qua hoàn toàn menu Thợ xây để không bấm nhầm",
+                checked = up.onlyActWhenBuilderFree,
+                onCheckedChange = { v -> onUpdateConfig { it.copy(upgrade = it.upgrade.copy(onlyActWhenBuilderFree = v)) } },
+            )
+            SettingSwitchRow(
+                title = "Tự xây công trình mới (New Buildings)",
+                subtitle = "Tự chọn nhà chưa xây trong gợi ý Thợ xây và bấm dấu tích xanh ✓ xác nhận",
+                checked = up.autoBuildNewBuildings,
+                onCheckedChange = { v -> onUpdateConfig { it.copy(upgrade = it.upgrade.copy(autoBuildNewBuildings = v)) } },
+            )
+            if (up.autoBuildNewBuildings) {
+                SettingSwitchRow(
+                    title = "Ưu tiên xây công trình mới trước khi nâng cũ",
+                    checked = up.prioritizeNewBuildingsFirst,
+                    onCheckedChange = { v -> onUpdateConfig { it.copy(upgrade = it.upgrade.copy(prioritizeNewBuildingsFirst = v)) } },
+                )
+            }
+            SettingSwitchRow(
+                title = "Bật tự nâng công trình có sẵn khi có Thợ rảnh",
                 checked = up.autoUpgradeBuildings,
                 onCheckedChange = { v -> onUpdateConfig { it.copy(upgrade = it.upgrade.copy(autoUpgradeBuildings = v)) } },
             )

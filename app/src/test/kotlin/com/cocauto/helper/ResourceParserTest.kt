@@ -197,4 +197,45 @@ class ResourceParserTest {
         val disabledCfg = bothCfg.copy(stopWhenStorageFull = false)
         assertFalse(ResourceParser.isStorageFull(home, fullBoth, disabledCfg))
     }
+
+    @Test
+    fun parseStrictBuilderStatus_picksLeftmostBuilderAndIgnoresLab() {
+        val mergedLine = listOf(
+            OcrTextLine("0/2 1/1", NormRect(0.85f, 0.74f, 0.95f, 0.79f)),
+        )
+        assertEquals(BuilderStatus(0, 2), ResourceParser.parseStrictBuilderStatus(mergedLine))
+
+        val separateLines = listOf(
+            OcrTextLine("1/1", NormRect(0.91f, 0.74f, 0.95f, 0.79f)),
+            OcrTextLine("0/2", NormRect(0.86f, 0.74f, 0.90f, 0.79f)),
+        )
+        assertEquals(BuilderStatus(0, 2), ResourceParser.parseStrictBuilderStatus(separateLines))
+    }
+
+    @Test
+    fun selectBestBuildingUpgrade_prioritizesNewBuildingsWhenConfigured() {
+        val lines = listOf(
+            OcrTextLine("Xây mới", NormRect(0.50f, 0.16f, 0.65f, 0.19f)),
+            OcrTextLine("Súng Cối", NormRect(0.50f, 0.22f, 0.64f, 0.25f)),
+            OcrTextLine("25 000", NormRect(0.75f, 0.22f, 0.85f, 0.25f)),
+            OcrTextLine("Đề xuất nâng cấp", NormRect(0.50f, 0.30f, 0.70f, 0.33f)),
+            OcrTextLine("Pháo Đại Bác", NormRect(0.50f, 0.36f, 0.68f, 0.39f)),
+            OcrTextLine("10 000", NormRect(0.75f, 0.36f, 0.85f, 0.39f)),
+        )
+        val candidates = ResourceParser.parseUpgradeCandidates(lines) { CurrencyType.GOLD }
+        assertTrue(candidates.first { it.name == "Súng Cối" }.isNewBuilding)
+        assertFalse(candidates.first { it.name == "Pháo Đại Bác" }.isNewBuilding)
+
+        val home = HomeResources(gold = 350_000L, elixir = 350_000L, darkElixir = 0L)
+        val cfg = AutoUpgradeConfig(
+            minKeepGold = 10_000L,
+            autoBuildNewBuildings = true,
+            prioritizeNewBuildingsFirst = true,
+            autoUpgradeBuildings = true,
+            upgradePriority = UpgradePriorityOrder.CHEAPEST_FIRST,
+        )
+        val selected = ResourceParser.selectBestBuildingUpgrade(candidates, home, cfg)
+        assertEquals("Súng Cối", selected?.name)
+        assertTrue(selected?.isNewBuilding == true)
+    }
 }

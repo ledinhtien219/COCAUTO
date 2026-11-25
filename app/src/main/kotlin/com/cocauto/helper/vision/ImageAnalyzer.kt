@@ -150,6 +150,57 @@ object ImageAnalyzer {
     }
 
     /**
+     * Locates Clash of Clans's vivid green circular checkmark button ("✓") displayed above a newly
+     * placed building blueprint so the bot can confirm construction cleanly.
+     */
+    fun findGreenCheckmarkButton(frame: Bitmap): NormPoint? {
+        if (frame.isRecycled || frame.width < 120 || frame.height < 80) return null
+
+        val hsv = FloatArray(3)
+        val left = (frame.width * 0.16f).toInt()
+        val right = (frame.width * 0.84f).toInt()
+        val top = (frame.height * 0.14f).toInt()
+        val bottom = (frame.height * 0.80f).toInt()
+        val step = (frame.width / 120).coerceIn(8, 22)
+
+        val greenHits = mutableListOf<Pair<Int, Int>>()
+        var y = top
+        while (y < bottom) {
+            var x = left
+            while (x < right) {
+                Color.colorToHSV(frame.getPixel(x, y), hsv)
+                val h = hsv[0]
+                val s = hsv[1]
+                val v = hsv[2]
+                // Bright saturated lime-emerald button (distinct from duller background grass)
+                if (h in 92f..146f && s >= 0.62f && v >= 0.62f) {
+                    greenHits.add(x to y)
+                }
+                x += step
+            }
+            y += step
+        }
+        if (greenHits.size < 4) return null
+
+        // Find the densest local cluster within ~4% screen radius
+        val clusterRadius = frame.width * 0.042
+        var bestCluster: List<Pair<Int, Int>> = emptyList()
+        for (pt in greenHits) {
+            val neighbors = greenHits.filter { other ->
+                hypot((other.first - pt.first).toDouble(), (other.second - pt.second).toDouble()) <= clusterRadius
+            }
+            if (neighbors.size > bestCluster.size) {
+                bestCluster = neighbors
+            }
+        }
+        if (bestCluster.size < 4) return null
+
+        val avgX = bestCluster.map { it.first }.average().toFloat() / frame.width
+        val avgY = bestCluster.map { it.second }.average().toFloat() / frame.height
+        return NormPoint(avgX.coerceIn(0.10f, 0.90f), avgY.coerceIn(0.10f, 0.85f))
+    }
+
+    /**
      * Identifies whether a cost icon right next to a price text is Gold, Elixir, or Dark Elixir
      * by examining HSV pixel votes slightly to the right/around [costBounds].
      */

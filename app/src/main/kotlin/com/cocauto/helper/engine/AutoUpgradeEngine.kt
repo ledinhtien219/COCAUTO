@@ -7,26 +7,37 @@ import com.cocauto.helper.model.GameScreenState
 import com.cocauto.helper.model.HomeResources
 import com.cocauto.helper.model.LogLevel
 import com.cocauto.helper.model.NormPoint
+import com.cocauto.helper.model.NormRect
 import com.cocauto.helper.vision.ImageAnalyzer
 import com.cocauto.helper.vision.ResourceParser
 
 /**
- * Handles all Home Village automatic upgrades:
- * 1. Wall upgrades when Gold/Elixir exceeds threshold (supporting dedicated reserved wall builder)
- * 2. Building upgrades via Builder Suggested Upgrades menu (respecting avoid keywords & min reserves)
- * 3. Laboratory troop/spell research upgrades (respecting interval, avoid keywords & min reserves)
+ * Handles all Home Village automatic construction & upgrades with strict Builder-Free detection:
+ * 1. Strictly reads free/total Builders ("0/2", "1/5") — NEVER opens Builder menu when 0 builders are free
+ * 2. Auto Wall upgrades when Gold/Elixir exceeds threshold (can use dedicated reserved wall builder)
+ * 3. Auto New Building construction (places blueprint & taps green checkmark ✓) + Building Upgrades
+ * 4. Auto Laboratory troop/spell research upgrades (independent of Builders!)
  */
 class AutoUpgradeEngine {
     private var lastLabCheckAtMs: Long = 0L
 
     suspend fun runUpgradeCycle(ctx: BotExecutionContext) {
         val upgradeCfg = ctx.config.upgrade
-        if (!upgradeCfg.autoUpgradeWalls && !upgradeCfg.autoUpgradeBuildings && !upgradeCfg.autoUpgradeLab) {
+        val wantsBuilderWork = upgradeCfg.autoUpgradeWalls ||
+            upgradeCfg.autoUpgradeBuildings ||
+            upgradeCfg.autoBuildNewBuildings
+
+        if (!wantsBuilderWork && !upgradeCfg.autoUpgradeLab) {
             return
         }
 
-        // Read fresh Home Resources and Builder counts
-        val (homeRes, builders) = readHomeSnapshot(ctx) ?: return
+        // Read Home Resources + strict Builder count (retry once if OCR missed mid-animation)
+        var snapshot = readHomeSnapshot(ctx) ?: return
+        if (!snapshot.second.isValid) {
+            ctx.sleep(280L)
+            snapshot = readHomeSnapshot(ctx) ?: snapshot
+        }
+        val (homeRes, builders) = snapshot
         BotStateStore.updateStats {
             it.copy(
                 lastHomeResources = homeRes,
@@ -34,31 +45,51 @@ class AutoUpgradeEngine {
             )
         }
 
-        // 1. Auto Wall Upgrades (can use reserved wall builder)
-        if (upgradeCfg.autoUpgradeWalls && builders.freeBuilders >= 1) {
-            runWallUpgrades(ctx, homeRes, builders)
-        }
-
-        // 2. Auto Building Upgrades (only uses builders above reserveBuildersForWalls)
-        if (upgradeCfg.autoUpgradeBuildings) {
-            val freshSnapshot = readHomeSnapshot(ctx)
-            val curHome = freshSnapshot?.first ?: homeRes
-            val curBuilders = freshSnapshot?.second ?: builders
-            val usableBuilders = ResourceParser.usableBuildingBuilders(
-                curBuilders,
-                upgradeCfg.reserveBuildersForWalls,
-            )
-            if (usableBuilders > 0) {
-                runBuildingUpgrades(ctx, curHome, usableBuilders)
-            } else if (curBuilders.freeBuilders > 0 && upgradeCfg.reserveBuildersForWalls > 0) {
+        // Strict Builder-Free gate before doing ANY Wall / Build / Upgrade action
+        if (wantsBuilderWork) {
+            if (!builders.isValid && upgradeCfg.onlyActWhenBuilderFree) {
                 BotStateStore.log(
-                    "Đang giữ ${curBuilders.freeBuilders} thợ xây dành riêng cho nâng Tường.",
+                    "Chưa nhận diện rõ số Thợ xây — tạm bỏ qua nâng/xây để tránh bấm nhầm.",
+                    LogLevel.WARN,
+                )
+            } else if (builders.freeBuilders <= 0 && upgradeCfg.onlyActWhenBuilderFree) {
+                BotStateStore.log(
+                    "Thợ xây đang bận (${builders.freeBuilders}/${builders.totalBuilders}) — chỉ nâng & xây khi có Thợ rảnh.",
                     LogLevel.INFO,
                 )
+            } else {
+                BotStateStore.log(
+                    "Nhận diện ${builders.freeBuilders}/${builders.totalBuilders} Thợ xây rảnh — kiểm tra nâng & xây mới!",
+                    LogLevel.SUCCESS,
+                )
+
+                // 1. Auto Wall Upgrades (can use reserved wall builder)
+                if (upgradeCfg.autoUpgradeWalls && builders.freeBuilders >= 1) {
+                    runWallUpgrades(ctx, homeRes, builders)
+                }
+
+                // 2. Auto New Building Construction & Building Upgrades (uses builders above reserveBuildersForWalls)
+                if (upgradeCfg.autoUpgradeBuildings || upgradeCfg.autoBuildNewBuildings) {
+                    val fresh = readHomeSnapshot(ctx)
+                    val curHome = fresh?.first ?: homeRes
+                    val curBuilders = fresh?.second ?: builders
+                    val usableBuilders = ResourceParser.usableBuildingBuilders(
+                        curBuilders,
+                        upgradeCfg.reserveBuildersForWalls,
+                    )
+                    if (usableBuilders > 0) {
+                        runBuildAndUpgradeBuildings(ctx, curHome, usableBuilders)
+                    } else if (curBuilders.freeBuilders > 0 && upgradeCfg.reserveBuildersForWalls > 0) {
+                        BotStateStore.log(
+                            "Đang giữ ${curBuilders.freeBuilders} thợ xây dành riêng cho nâng Tường.",
+                            LogLevel.INFO,
+                        )
+                    }
+                }
             }
         }
 
-        // 3. Auto Laboratory Upgrade on configured interval
+        // 3. Auto Laboratory Upgrade (runs on interval — Lab does NOT require a free Builder)
         if (upgradeCfg.autoUpgradeLab) {
             val intervalMs = upgradeCfg.labCheckIntervalMinutes.coerceAtLeast(1) * 60_000L
             val now = System.currentTimeMillis()
@@ -82,10 +113,11 @@ class AutoUpgradeEngine {
 
         val maxLoops = cfg.maxWallsPerCycle.coerceIn(1, 20)
         for (i in 1..maxLoops) {
+            if (currentBuilders.freeBuilders < 1) break
             val currency = ResourceParser.chooseWallUpgradeCurrency(currentHome, currentBuilders, cfg)
                 ?: break
 
-            BotStateStore.setAction("Kiểm tra nâng Tường #$i (${currency.name})", GameScreenState.BUILDER_SUGGESTIONS_OPEN)
+            BotStateStore.setAction("Thợ rảnh — kiểm tra nâng Tường #$i", GameScreenState.BUILDER_SUGGESTIONS_OPEN)
             ctx.tap(cal.builderBadgeButton)
             ctx.sleep(650L)
 
@@ -97,7 +129,6 @@ class AutoUpgradeEngine {
                 break
             }
 
-            // Verify actual wall cost against min keep reserve before tapping
             if (!ResourceParser.respectsResourceReserve(currentHome, wallCandidate.cost, currency, cfg)) {
                 BotStateStore.log(
                     "Bỏ qua nâng Tường (giá ${wallCandidate.cost}) để giữ tài nguyên tối thiểu.",
@@ -107,7 +138,6 @@ class AutoUpgradeEngine {
                 break
             }
 
-            // Select wall row -> camera centers on wall -> tap currency button -> confirm
             ctx.tap(wallCandidate.tapPoint)
             ctx.sleep(750L)
 
@@ -124,16 +154,16 @@ class AutoUpgradeEngine {
             BotStateStore.updateStats { it.copy(wallsUpgraded = it.wallsUpgraded + 1) }
             BotStateStore.log("Đã nâng 1 ô Tường bằng ${if (currency == CurrencyType.ELIXIR) "Dầu" else "Vàng"}!", LogLevel.SUCCESS)
 
-            // Dismiss selection & refresh home resources for next loop
             ctx.tap(cal.dismissAreaPoint)
             ctx.sleep(450L)
             val refreshed = readHomeSnapshot(ctx) ?: break
             currentHome = refreshed.first
             currentBuilders = refreshed.second
+            BotStateStore.updateStats { it.copy(lastBuilderStatus = currentBuilders) }
         }
     }
 
-    private suspend fun runBuildingUpgrades(
+    private suspend fun runBuildAndUpgradeBuildings(
         ctx: BotExecutionContext,
         initialHome: HomeResources,
         usableBuilders: Int,
@@ -142,14 +172,14 @@ class AutoUpgradeEngine {
         val cal = ctx.calibration
         var currentHome = initialHome
 
-        for (slot in 1..usableBuilders.coerceAtMost(4)) {
-            BotStateStore.setAction("Tìm công trình nâng cấp (Thợ rảnh #$slot)", GameScreenState.BUILDER_SUGGESTIONS_OPEN)
+        for (slot in 1..usableBuilders.coerceAtMost(5)) {
+            BotStateStore.setAction("Thợ rảnh #$slot — tìm công trình xây/nâng", GameScreenState.BUILDER_SUGGESTIONS_OPEN)
             ctx.tap(cal.builderBadgeButton)
-            ctx.sleep(650L)
+            ctx.sleep(700L)
 
             var chosen = findBestCandidateInDrawer(ctx, currentHome)
-            // If nothing eligible on first page, scroll Builder Suggestions down once and re-scan
             if (chosen == null) {
+                // Scroll Builder Suggestions down once and re-scan
                 val roi = cal.builderSuggestionsRoi
                 ctx.swipe(
                     from = NormPoint(roi.centerX, roi.bottom - 0.06f),
@@ -161,31 +191,64 @@ class AutoUpgradeEngine {
             }
 
             if (chosen == null) {
-                BotStateStore.log("Không có công trình phù hợp bộ lọc & ngưỡng giữ tài nguyên.", LogLevel.INFO)
+                BotStateStore.log("Không có công trình xây mới / nâng cấp nào đạt bộ lọc & ngưỡng giữ tài nguyên.", LogLevel.INFO)
                 ctx.tap(cal.dismissAreaPoint)
                 break
             }
 
-            BotStateStore.log(
-                "Chọn nâng cấp: ${chosen.name} (giá ~${chosen.cost}, ${chosen.currency.name})",
-                LogLevel.INFO,
-            )
-            // Tap candidate row -> camera selects building -> tap Upgrade icon -> tap Confirm
-            ctx.tap(chosen.tapPoint)
-            ctx.sleep(850L)
-            ctx.tap(cal.upgradeActionButton)
-            ctx.sleep(700L)
-            ctx.tap(cal.upgradeConfirmButton)
-            ctx.sleep(800L)
-            ctx.tap(cal.dismissAreaPoint)
-            ctx.sleep(500L)
+            if (chosen.isNewBuilding) {
+                BotStateStore.log(
+                    "Thợ rảnh -> Chọn XÂY MỚI: ${chosen.name} (giá ~${chosen.cost})",
+                    LogLevel.INFO,
+                )
+                ctx.tap(chosen.tapPoint)
+                ctx.sleep(950L)
 
-            BotStateStore.updateStats { it.copy(buildingsUpgraded = it.buildingsUpgraded + 1) }
-            BotStateStore.log("Đã gửi lệnh nâng cấp ${chosen.name}!", LogLevel.SUCCESS)
+                // Find green checkmark ✓ button on the newly placed blueprint
+                val checkmarkPt = ctx.withFrame { frame ->
+                    ImageAnalyzer.findGreenCheckmarkButton(frame)
+                }
+                if (checkmarkPt != null) {
+                    ctx.tap(checkmarkPt)
+                    ctx.sleep(800L)
+                    BotStateStore.updateStats { it.copy(buildingsBuilt = it.buildingsBuilt + 1) }
+                    BotStateStore.log("Đã đặt xây mới công trình: ${chosen.name}!", LogLevel.SUCCESS)
+                } else {
+                    BotStateStore.log("Không thấy nút tích xanh xác nhận xây mới — hủy chọn.", LogLevel.WARN)
+                    ctx.tap(cal.dismissAreaPoint)
+                    ctx.sleep(450L)
+                }
+            } else {
+                BotStateStore.log(
+                    "Thợ rảnh -> Chọn NÂNG CẤP: ${chosen.name} (giá ~${chosen.cost}, ${chosen.currency.name})",
+                    LogLevel.INFO,
+                )
+                ctx.tap(chosen.tapPoint)
+                ctx.sleep(850L)
+                ctx.tap(cal.upgradeActionButton)
+                ctx.sleep(700L)
+                ctx.tap(cal.upgradeConfirmButton)
+                ctx.sleep(800L)
+                ctx.tap(cal.dismissAreaPoint)
+                ctx.sleep(500L)
 
+                BotStateStore.updateStats { it.copy(buildingsUpgraded = it.buildingsUpgraded + 1) }
+                BotStateStore.log("Đã gửi lệnh nâng cấp ${chosen.name}!", LogLevel.SUCCESS)
+            }
+
+            // Re-verify remaining free builders immediately so we stop as soon as all builders are busy!
             val refreshed = readHomeSnapshot(ctx) ?: break
             currentHome = refreshed.first
-            if (ResourceParser.usableBuildingBuilders(refreshed.second, cfg.reserveBuildersForWalls) <= 0) {
+            BotStateStore.updateStats {
+                it.copy(lastHomeResources = currentHome, lastBuilderStatus = refreshed.second)
+            }
+            if (!refreshed.second.isValid ||
+                ResourceParser.usableBuildingBuilders(refreshed.second, cfg.reserveBuildersForWalls) <= 0
+            ) {
+                BotStateStore.log(
+                    "Thợ xây đã nhận việc (${refreshed.second.freeBuilders}/${refreshed.second.totalBuilders}) — dừng nâng/xây.",
+                    LogLevel.INFO,
+                )
                 break
             }
         }
@@ -231,7 +294,7 @@ class AutoUpgradeEngine {
 
     private suspend fun scanUpgradeDrawer(
         ctx: BotExecutionContext,
-        roi: com.cocauto.helper.model.NormRect,
+        roi: NormRect,
     ) = ctx.withFrame { frame ->
         val ocr = ctx.ocrEngine.recognizeRoi(frame, roi, enhance = true)
         ResourceParser.parseUpgradeCandidates(ocr.lines) { costLine ->

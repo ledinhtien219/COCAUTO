@@ -124,7 +124,18 @@ class ScreenStateDetector(
 
     suspend fun readBuilderStatus(frame: Bitmap, calibration: CalibrationProfile): BuilderStatus {
         val builderOcr = ocrEngine.recognizeRoi(frame, calibration.builderBadgeRoi, enhance = true)
-        return ResourceParser.parseBuilderStatus(builderOcr.fullText) ?: BuilderStatus()
+        ResourceParser.parseStrictBuilderStatus(builderOcr.lines)?.let { return it }
+
+        // Fallback: slightly widened crop around builderBadgeButton (strictly taking leftmost X/Y so Lab 1/1 is ignored)
+        val btn = calibration.builderBadgeButton
+        val fallbackRoi = com.cocauto.helper.model.NormRect(
+            left = (btn.x - 0.055f).coerceIn(0.01f, 0.92f),
+            top = (btn.y - 0.050f).coerceIn(0.01f, 0.92f),
+            right = (btn.x + 0.045f).coerceIn(0.08f, 0.99f),
+            bottom = (btn.y + 0.045f).coerceIn(0.08f, 0.99f),
+        ).normalized()
+        val fallbackOcr = ocrEngine.recognizeRoi(frame, fallbackRoi, enhance = true)
+        return ResourceParser.parseStrictBuilderStatus(fallbackOcr.lines) ?: BuilderStatus()
     }
 
     suspend fun readEnemyLoot(frame: Bitmap, calibration: CalibrationProfile): LootReading {

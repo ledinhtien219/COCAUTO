@@ -136,6 +136,27 @@ object ResourceParser {
         return status.takeIf { it.isValid }
     }
 
+    /**
+     * Strictly extracts the Builder ratio ("0/2", "1/5") from OCR lines while avoiding
+     * confusion with the adjacent Laboratory ratio ("1/1") to the right in the 2026 CoC HUD.
+     * Always prefers the leftmost valid fraction.
+     */
+    fun parseStrictBuilderStatus(lines: List<OcrTextLine>): BuilderStatus? {
+        if (lines.isEmpty()) return null
+        val ordered = lines.sortedBy { it.bounds.left }
+        for (line in ordered) {
+            val matches = builderRatioRegex.findAll(line.text).toList()
+            if (matches.isEmpty()) continue
+            // Always take the leftmost fraction inside a merged line like "0/2 1/1"
+            val firstMatch = matches.first()
+            val free = fixSingleDigit(firstMatch.groupValues[1]) ?: continue
+            val total = fixSingleDigit(firstMatch.groupValues[2]) ?: continue
+            val status = BuilderStatus(freeBuilders = free, totalBuilders = total)
+            if (status.isValid) return status
+        }
+        return null
+    }
+
     private fun fixSingleDigit(token: String): Int? = when (token) {
         "O", "o" -> 0
         "I", "l", "|" -> 1
@@ -193,18 +214,33 @@ object ResourceParser {
         }
 
         val candidates = mutableListOf<UpgradeCandidate>()
+        var insideNewBuildingSection = false
+
         for (row in rows) {
             val sortedLeftToRight = row.sortedBy { it.bounds.left }
             val fullNorm = normalizeForMatch(sortedLeftToRight.joinToString(" ") { it.text })
 
-            // Skip section headers
+            // Track section headers ("New Buildings" / "Xây mới" vs "Suggested Upgrades" / "Đề xuất nâng cấp")
+            if (fullNorm.contains("new building") ||
+                fullNorm.contains("xay moi") ||
+                fullNorm.contains("cong trinh moi") ||
+                fullNorm.contains("chua xay") ||
+                fullNorm == "new" ||
+                fullNorm == "moi"
+            ) {
+                insideNewBuildingSection = true
+                continue
+            }
+
             if (fullNorm.contains("suggested") ||
                 fullNorm.contains("de xuat") ||
                 fullNorm.contains("goi y") ||
                 fullNorm.contains("in progress") ||
                 fullNorm.contains("dang nang") ||
-                fullNorm.contains("other upgrades")
+                fullNorm.contains("other upgrades") ||
+                fullNorm.contains("nang cap khac")
             ) {
+                insideNewBuildingSection = false
                 continue
             }
 
@@ -228,6 +264,12 @@ object ResourceParser {
 
             val normName = normalizeForMatch(name)
             val isWall = normName.contains("wall") || normName.contains("tuong")
+            val isNewTagged = insideNewBuildingSection ||
+                normName.startsWith("new ") ||
+                normName.endsWith(" new") ||
+                normName.contains("(new)") ||
+                normName.contains("xay moi") ||
+                normName.contains("(moi)")
             val resolvedCost = costValue ?: 0L
             val currency = costLine?.let(currencyResolver) ?: CurrencyType.UNKNOWN
             val tapLine = sortedLeftToRight.first()
@@ -243,6 +285,7 @@ object ResourceParser {
                         y = tapLine.bounds.centerY,
                     ),
                     isWall = isWall,
+                    isNewBuilding = isNewTagged && !isWall,
                 )
             )
         }
@@ -283,7 +326,8 @@ object ResourceParser {
     }
 
     /**
-     * Selects the best non-wall building upgrade respecting blacklist, reserves, and priority order.
+     * Selects the best non-wall building action (New Building construction OR existing Building Upgrade)
+     * respecting enabled toggles, new-building priority, blacklist keywords, reserves, and cost order.
      */
     fun selectBestBuildingUpgrade(
         candidates: List<UpgradeCandidate>,
@@ -292,15 +336,23 @@ object ResourceParser {
     ): UpgradeCandidate? {
         val eligible = candidates.filter { item ->
             !item.isWall &&
+                ((item.isNewBuilding && config.autoBuildNewBuildings) ||
+                    (!item.isNewBuilding && config.autoUpgradeBuildings)) &&
                 !isSkippedByKeywords(item.name, config.skipBuildingKeywords) &&
                 respectsResourceReserve(home, item.cost, item.currency, config)
         }
         if (eligible.isEmpty()) return null
 
+        val pool = if (config.autoBuildNewBuildings && config.prioritizeNewBuildingsFirst) {
+            eligible.filter { it.isNewBuilding }.ifEmpty { eligible }
+        } else {
+            eligible
+        }
+
         return when (config.upgradePriority) {
-            UpgradePriorityOrder.CHEAPEST_FIRST -> eligible.minByOrNull { if (it.cost > 0L) it.cost else Long.MAX_VALUE }
-            UpgradePriorityOrder.MOST_EXPENSIVE_FIRST -> eligible.maxByOrNull { it.cost }
-            UpgradePriorityOrder.TOP_OF_LIST -> eligible.first()
+            UpgradePriorityOrder.CHEAPEST_FIRST -> pool.minByOrNull { if (it.cost > 0L) it.cost else Long.MAX_VALUE }
+            UpgradePriorityOrder.MOST_EXPENSIVE_FIRST -> pool.maxByOrNull { it.cost }
+            UpgradePriorityOrder.TOP_OF_LIST -> pool.first()
         }
     }
 

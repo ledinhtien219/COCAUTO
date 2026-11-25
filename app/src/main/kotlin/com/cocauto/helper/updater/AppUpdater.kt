@@ -29,17 +29,23 @@ import java.security.MessageDigest
 class AppUpdater(private val context: Context) {
 
     private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("coc_updater_state", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val state: StateFlow<UpdateUiState> = _state.asStateFlow()
 
     val currentVersionCode: Int get() = BuildConfig.VERSION_CODE
     val currentVersionName: String get() = BuildConfig.VERSION_NAME
 
+    init {
+        reconcilePendingInstall()
+    }
+
     suspend fun checkForUpdates(
         rawSourceUrl: String,
         autoDownload: Boolean = false,
         silentIfUnconfigured: Boolean = false,
     ) {
+        reconcilePendingInstall()
         val endpoint = UpdateManifestParser.normalizeSourceUrl(rawSourceUrl)
         if (endpoint.isBlank()) {
             if (!silentIfUnconfigured) {
@@ -55,7 +61,9 @@ class AppUpdater(private val context: Context) {
 
         result.fold(
             onSuccess = { release ->
-                val hasUpdate = UpdateManifestParser.isNewerVersion(
+                val alreadyInstalledSameUrl = release.apkUrl.isNotBlank() &&
+                    release.apkUrl == prefs.getString(KEY_INSTALLED_URL, null)
+                val hasUpdate = !alreadyInstalledSameUrl && UpdateManifestParser.isNewerVersion(
                     remote = release,
                     currentVersionCode = currentVersionCode,
                     currentVersionName = currentVersionName,
@@ -125,11 +133,20 @@ class AppUpdater(private val context: Context) {
 
     /**
      * Launches Android's standard Package Installer UI for the downloaded APK using FileProvider.
+     * Records pending install URL + current package lastUpdateTime so once installed, the app
+     * will never loop-download the exact same release again.
      */
     fun launchApkInstaller(activityContext: Context, apkFile: File): Boolean {
         if (!apkFile.exists() || apkFile.length() <= 0L) {
             _state.value = UpdateUiState.Error("Tệp APK đã tải không tồn tại.")
             return false
+        }
+        val readyUrl = (_state.value as? UpdateUiState.ReadyToInstall)?.release?.apkUrl
+        if (!readyUrl.isNullOrBlank()) {
+            prefs.edit()
+                .putString(KEY_PENDING_URL, readyUrl)
+                .putLong(KEY_PENDING_BASE_UPDATE_TIME, currentPackageUpdateTime())
+                .apply()
         }
         return runCatching {
             val contentUri = FileProvider.getUriForFile(
@@ -147,6 +164,31 @@ class AppUpdater(private val context: Context) {
         }.onFailure { err ->
             _state.value = UpdateUiState.Error("Không mở được trình cài đặt: ${err.message}")
         }.getOrDefault(false)
+    }
+
+    private fun reconcilePendingInstall() {
+        val pendingUrl = prefs.getString(KEY_PENDING_URL, null) ?: return
+        val baseTime = prefs.getLong(KEY_PENDING_BASE_UPDATE_TIME, 0L)
+        val liveUpdateTime = currentPackageUpdateTime()
+        if (baseTime > 0L && liveUpdateTime > baseTime) {
+            prefs.edit()
+                .putString(KEY_INSTALLED_URL, pendingUrl)
+                .remove(KEY_PENDING_URL)
+                .remove(KEY_PENDING_BASE_UPDATE_TIME)
+                .apply()
+        }
+    }
+
+    private fun currentPackageUpdateTime(): Long {
+        return runCatching {
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime
+        }.getOrDefault(0L)
+    }
+
+    companion object {
+        private const val KEY_INSTALLED_URL = "installed_release_url"
+        private const val KEY_PENDING_URL = "pending_install_url"
+        private const val KEY_PENDING_BASE_UPDATE_TIME = "pending_base_update_time"
     }
 
     private fun fetchManifest(endpoint: String): Result<UpdateReleaseInfo> {

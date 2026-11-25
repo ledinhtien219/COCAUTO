@@ -229,6 +229,7 @@ class MainActivity : ComponentActivity() {
 
                     2 -> UpgradeTab(
                         config = config,
+                        builderStatus = runtime.stats.lastBuilderStatus,
                         onUpdateConfig = { viewModel.updateConfig(it) },
                     )
 
